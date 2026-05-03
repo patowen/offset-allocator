@@ -1,32 +1,32 @@
-// offset-allocator/src/small_float.rs
-
-pub const MANTISSA_BITS: u32 = 3;
-pub const MANTISSA_VALUE: u32 = 1 << MANTISSA_BITS;
-pub const MANTISSA_MASK: u32 = MANTISSA_VALUE - 1;
-
 pub const NUM_LEAF_BINS: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmallFloat(u32);
 
 impl SmallFloat {
+    const MANTISSA_BITS: u32 = 3;
+    const EXPONENT_BITS: u32 = 5;
+    const NUM_VALUES: usize = 1 << (Self::MANTISSA_BITS + Self::EXPONENT_BITS);
+    const MANTISSA_VALUE: u32 = 1 << Self::MANTISSA_BITS;
+    const MANTISSA_MASK: u32 = Self::MANTISSA_VALUE - 1;
+
     pub fn values() -> impl ExactSizeIterator<Item = Self> {
-        (0..(NUM_LEAF_BINS as u32)).map(|i| Self(i))
+        (0..Self::NUM_VALUES).map(|i| Self(i as u32))
     }
 
     pub fn from_u32_round_up(value: u32) -> Self {
         let mut exp = 0;
         let mut mantissa;
 
-        if value < MANTISSA_VALUE {
+        if value < Self::MANTISSA_VALUE {
             // Denorm: 0..(MANTISSA_VALUE-1)
             mantissa = value
         } else {
             // Normalized: Hidden high bit always 1. Not stored. Just like float.
             let highest_set_bit = value.ilog2();
-            let mantissa_start_bit = highest_set_bit - MANTISSA_BITS;
+            let mantissa_start_bit = highest_set_bit - Self::MANTISSA_BITS;
             exp = mantissa_start_bit + 1;
-            mantissa = (value >> mantissa_start_bit) & MANTISSA_MASK;
+            mantissa = (value >> mantissa_start_bit) & Self::MANTISSA_MASK;
 
             let low_bits_mask = (1 << mantissa_start_bit) - 1;
 
@@ -37,34 +37,34 @@ impl SmallFloat {
         }
 
         // + allows mantissa->exp overflow for round up
-        SmallFloat((exp << MANTISSA_BITS) + mantissa)
+        SmallFloat((exp << Self::MANTISSA_BITS) + mantissa)
     }
 
     pub fn from_u32_round_down(value: u32) -> Self {
         let mut exp = 0;
         let mantissa;
 
-        if value < MANTISSA_VALUE {
+        if value < Self::MANTISSA_VALUE {
             // Denorm: 0..(MANTISSA_VALUE-1)
             mantissa = value
         } else {
             // Normalized: Hidden high bit always 1. Not stored. Just like float.
             let highest_set_bit = value.ilog2();
-            let mantissa_start_bit = highest_set_bit - MANTISSA_BITS;
+            let mantissa_start_bit = highest_set_bit - Self::MANTISSA_BITS;
             exp = mantissa_start_bit + 1;
-            mantissa = (value >> mantissa_start_bit) & MANTISSA_MASK;
+            mantissa = (value >> mantissa_start_bit) & Self::MANTISSA_MASK;
         }
 
-        SmallFloat((exp << MANTISSA_BITS) | mantissa)
+        SmallFloat((exp << Self::MANTISSA_BITS) | mantissa)
     }
 
     pub fn to_u32(self) -> u32 {
-        let exponent = self.0 >> MANTISSA_BITS;
-        let mantissa = self.0 & MANTISSA_MASK;
+        let exponent = self.0 >> Self::MANTISSA_BITS;
+        let mantissa = self.0 & Self::MANTISSA_MASK;
         if exponent == 0 {
             mantissa
         } else {
-            (mantissa | MANTISSA_VALUE) << (exponent - 1)
+            (mantissa | Self::MANTISSA_VALUE) << (exponent - 1)
         }
     }
 

@@ -11,10 +11,8 @@ use log::debug;
 use crate::small_float::{SmallFloat, SmallFloatMap};
 
 const NUM_TOP_BINS: usize = 32;
-const BINS_PER_LEAF: usize = 8;
 const TOP_BINS_INDEX_SHIFT: u32 = 3;
 const LEAF_BINS_INDEX_MASK: u32 = 7;
-const NUM_LEAF_BINS: usize = NUM_TOP_BINS * BINS_PER_LEAF;
 
 /// Determines the number of allocations that the allocator supports.
 ///
