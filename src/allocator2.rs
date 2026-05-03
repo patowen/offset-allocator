@@ -4,7 +4,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use std::fmt::{Debug, Display, Formatter};
 
 use log::debug;
 
@@ -89,9 +89,31 @@ pub struct Allocator<NI: NodeIndex = u32> {
     bin_indices: [NodeIndexOption<NI>; NUM_LEAF_BINS],
 
     /// (Patrick) A vector of length `max_allocs`, usually indexed by `node_index`
-    nodes: Vec<Node<NI>>,
+    nodes: NodeMap<NI>,
     /// (Patrick) A stack of length `max_allocs` that stores free nodes by their index. Starts full, so that `node_index` 0 is popped first. The index of the top of the stack is `free_offset`.
     free_nodes: FreeNodeStack<NI>,
+}
+
+struct NodeMap<NI: NodeIndex>(Vec<Node<NI>>);
+
+impl<NI: NodeIndex> NodeMap<NI> {
+    fn with_max_allocs(max_allocs: u32) -> Self {
+        Self(vec![Node::default(); max_allocs as usize])
+    }
+}
+
+impl<NI: NodeIndex> std::ops::Index<NI> for NodeMap<NI> {
+    type Output = Node<NI>;
+
+    fn index(&self, index: NI) -> &Self::Output {
+        &self.0[index.to_usize()]
+    }
+}
+
+impl<NI: NodeIndex> std::ops::IndexMut<NI> for NodeMap<NI> {
+    fn index_mut(&mut self, index: NI) -> &mut Self::Output {
+        &mut self.0[index.to_usize()]
+    }
 }
 
 struct FreeNodeStack<NI: NodeIndex>(Vec<NI>);
@@ -239,7 +261,7 @@ where
             used_bins_top: 0,
             used_bins: [0; NUM_TOP_BINS],
             bin_indices: [NodeIndexOption::NONE; NUM_LEAF_BINS],
-            nodes: vec![Node::default(); max_allocs as usize],
+            nodes: NodeMap::with_max_allocs(max_allocs),
             free_nodes: FreeNodeStack::with_max_allocs(max_allocs),
         };
         this.insert_node_into_bin(size, 0);
@@ -300,13 +322,13 @@ where
 
         // Pop the top node of the bin. Bin top = node.next.
         let node_index = self.bin_indices[bin_index as usize].unwrap();
-        let node = &mut self.nodes[node_index.to_usize()];
+        let node = &mut self.nodes[node_index];
         let node_total_size = node.data_size;
         node.data_size = size;
         node.used = true;
         self.bin_indices[bin_index as usize] = node.bin_list_next;
         if let Some(bin_list_next) = node.bin_list_next.to_option() {
-            self.nodes[bin_list_next.to_usize()].bin_list_prev = NodeIndexOption::NONE;
+            self.nodes[bin_list_next].bin_list_prev = NodeIndexOption::NONE;
         }
         self.free_storage -= node_total_size;
         debug!(
@@ -333,23 +355,22 @@ where
                 data_offset,
                 neighbor_next,
                 ..
-            } = self.nodes[node_index.to_usize()];
+            } = self.nodes[node_index];
 
             let new_node_index = self.insert_node_into_bin(remainder_size, data_offset + size);
 
             // Link nodes next to each other so that we can merge them later if both are free
             // And update the old next neighbor to point to the new node (in middle)
-            let node = &mut self.nodes[node_index.to_usize()];
+            let node = &mut self.nodes[node_index];
             if let Some(neighbor_next) = node.neighbor_next.to_option() {
-                self.nodes[neighbor_next.to_usize()].neighbor_prev =
-                    NodeIndexOption::some(new_node_index);
+                self.nodes[neighbor_next].neighbor_prev = NodeIndexOption::some(new_node_index);
             }
-            self.nodes[new_node_index.to_usize()].neighbor_prev = NodeIndexOption::some(node_index);
-            self.nodes[new_node_index.to_usize()].neighbor_next = neighbor_next;
-            self.nodes[node_index.to_usize()].neighbor_next = NodeIndexOption::some(new_node_index);
+            self.nodes[new_node_index].neighbor_prev = NodeIndexOption::some(node_index);
+            self.nodes[new_node_index].neighbor_next = neighbor_next;
+            self.nodes[node_index].neighbor_next = NodeIndexOption::some(new_node_index);
         }
 
-        let node = &mut self.nodes[node_index.to_usize()];
+        let node = &mut self.nodes[node_index];
         Some(Allocation {
             offset: node.data_offset,
             metadata: node_index,
@@ -371,16 +392,16 @@ where
             data_size: mut size,
             used,
             ..
-        } = self.nodes[node_index.to_usize()];
+        } = self.nodes[node_index];
 
         // Double delete check
         assert!(used);
 
-        if let Some(neighbor_prev) = self.nodes[node_index.to_usize()].neighbor_prev.to_option() {
-            if !self.nodes[neighbor_prev.to_usize()].used {
+        if let Some(neighbor_prev) = self.nodes[node_index].neighbor_prev.to_option() {
+            if !self.nodes[neighbor_prev].used {
                 // Previous (contiguous) free node: Change offset to previous
                 // node offset. Sum sizes
-                let prev_node = &self.nodes[neighbor_prev.to_usize()];
+                let prev_node = &self.nodes[neighbor_prev];
                 offset = prev_node.data_offset;
                 size += prev_node.data_size;
 
@@ -388,26 +409,26 @@ where
                 // freelist
                 self.remove_node_from_bin(neighbor_prev);
 
-                let prev_node = &self.nodes[neighbor_prev.to_usize()];
+                let prev_node = &self.nodes[neighbor_prev];
                 debug_assert_eq!(prev_node.neighbor_next, NodeIndexOption::some(node_index));
-                self.nodes[node_index.to_usize()].neighbor_prev = prev_node.neighbor_prev;
+                self.nodes[node_index].neighbor_prev = prev_node.neighbor_prev;
             }
         }
 
-        if let Some(neighbor_next) = self.nodes[node_index.to_usize()].neighbor_next.to_option() {
-            if !self.nodes[neighbor_next.to_usize()].used {
+        if let Some(neighbor_next) = self.nodes[node_index].neighbor_next.to_option() {
+            if !self.nodes[neighbor_next].used {
                 // Next (contiguous) free node: Offset remains the same. Sum
                 // sizes.
-                let next_node = &self.nodes[neighbor_next.to_usize()];
+                let next_node = &self.nodes[neighbor_next];
                 size += next_node.data_size;
 
                 // Remove node from the bin linked list and put it in the
                 // freelist
                 self.remove_node_from_bin(neighbor_next);
 
-                let next_node = &self.nodes[neighbor_next.to_usize()];
+                let next_node = &self.nodes[neighbor_next];
                 debug_assert_eq!(next_node.neighbor_prev, NodeIndexOption::some(node_index));
-                self.nodes[node_index.to_usize()].neighbor_next = next_node.neighbor_next;
+                self.nodes[node_index].neighbor_next = next_node.neighbor_next;
             }
         }
 
@@ -415,7 +436,7 @@ where
             neighbor_next,
             neighbor_prev,
             ..
-        } = self.nodes[node_index.to_usize()];
+        } = self.nodes[node_index];
 
         // Insert the removed node to freelist
         self.free_nodes.push(node_index);
@@ -425,16 +446,12 @@ where
 
         // Connect neighbors with the new combined node
         if let Some(neighbor_next) = neighbor_next.to_option() {
-            self.nodes[combined_node_index.to_usize()].neighbor_next =
-                NodeIndexOption::some(neighbor_next);
-            self.nodes[neighbor_next.to_usize()].neighbor_prev =
-                NodeIndexOption::some(combined_node_index);
+            self.nodes[combined_node_index].neighbor_next = NodeIndexOption::some(neighbor_next);
+            self.nodes[neighbor_next].neighbor_prev = NodeIndexOption::some(combined_node_index);
         }
         if let Some(neighbor_prev) = neighbor_prev.to_option() {
-            self.nodes[combined_node_index.to_usize()].neighbor_prev =
-                NodeIndexOption::some(neighbor_prev);
-            self.nodes[neighbor_prev.to_usize()].neighbor_next =
-                NodeIndexOption::some(combined_node_index);
+            self.nodes[combined_node_index].neighbor_prev = NodeIndexOption::some(neighbor_prev);
+            self.nodes[neighbor_prev].neighbor_next = NodeIndexOption::some(combined_node_index);
         }
     }
 
@@ -455,14 +472,14 @@ where
         // Take a freelist node and insert on top of the bin linked list (next = old top)
         let top_node_index = self.bin_indices[bin_index as usize];
         let node_index = self.free_nodes.pop_required();
-        self.nodes[node_index.to_usize()] = Node {
+        self.nodes[node_index] = Node {
             data_offset,
             data_size: size,
             bin_list_next: top_node_index,
             ..Node::default()
         };
         if let Some(top_node_index) = top_node_index.to_option() {
-            self.nodes[top_node_index.to_usize()].bin_list_prev = NodeIndexOption::some(node_index);
+            self.nodes[top_node_index].bin_list_prev = NodeIndexOption::some(node_index);
         }
         self.bin_indices[bin_index as usize] = NodeIndexOption::some(node_index);
 
@@ -476,14 +493,14 @@ where
 
     fn remove_node_from_bin(&mut self, node_index: NI) {
         // Copy the node to work around borrow check.
-        let node = self.nodes[node_index.to_usize()];
+        let node = self.nodes[node_index];
 
         match node.bin_list_prev.to_option() {
             Some(bin_list_prev) => {
                 // Easy case: We have previous node. Just remove this node from the middle of the list.
-                self.nodes[bin_list_prev.to_usize()].bin_list_next = node.bin_list_next;
+                self.nodes[bin_list_prev].bin_list_next = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next.to_option() {
-                    self.nodes[bin_list_next.to_usize()].bin_list_prev = node.bin_list_prev;
+                    self.nodes[bin_list_next].bin_list_prev = node.bin_list_prev;
                 }
             }
             None => {
@@ -497,7 +514,7 @@ where
 
                 self.bin_indices[bin_index as usize] = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next.to_option() {
-                    self.nodes[bin_list_next.to_usize()].bin_list_prev = NodeIndexOption::NONE;
+                    self.nodes[bin_list_next].bin_list_prev = NodeIndexOption::NONE;
                 }
 
                 // Bin empty?
@@ -527,12 +544,9 @@ where
     /// Returns the *used* size of an allocation.
     ///
     /// Note that this may be larger than the size requested at allocation time,
-    /// due to rounding.
+    /// due to rounding. (Patrick) No, it's never larger.
     pub fn allocation_size(&self, allocation: Allocation<NI>) -> u32 {
-        self.nodes
-            .get(allocation.metadata.to_usize())
-            .map(|node| node.data_size)
-            .unwrap_or_default()
+        self.nodes[allocation.metadata].data_size
     }
 
     /// Returns a structure containing the amount of free space remaining, as
@@ -571,7 +585,7 @@ where
             let mut count = 0;
             let mut maybe_node_index = self.bin_indices[i];
             while let Some(node_index) = maybe_node_index.to_option() {
-                maybe_node_index = self.nodes[node_index.to_usize()].bin_list_next;
+                maybe_node_index = self.nodes[node_index].bin_list_next;
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
@@ -595,7 +609,7 @@ impl<NI> Debug for Allocator<NI>
 where
     NI: NodeIndex,
 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.storage_report().fmt(f)
     }
 }
