@@ -1,8 +1,4 @@
-// offset-allocator/src/lib.rs
-
-#![doc = include_str!("../README.md")]
-#![deny(unsafe_code)]
-#![warn(missing_docs)]
+//! TODO: Document
 
 use std::fmt::{Debug, Formatter};
 
@@ -103,7 +99,7 @@ pub struct StorageReport {
 }
 
 /// Provides a detailed accounting of each bin within the allocator.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StorageReportFull {
     /// Each bin within the allocator.
     pub free_regions: SmallFloatMap<StorageReportFullRegion>,
@@ -453,14 +449,6 @@ where
     }
 }
 
-impl Default for StorageReportFull {
-    fn default() -> Self {
-        Self {
-            free_regions: SmallFloatMap::default(),
-        }
-    }
-}
-
 impl<NI> Debug for Allocator<NI>
 where
     NI: NodeIndex,
@@ -468,4 +456,10 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.storage_report().fmt(f)
     }
+}
+
+/// Returns the minimum allocator size needed to hold an object of the given
+/// size.
+pub fn min_allocator_size(needed_object_size: u32) -> u32 {
+    SmallFloat::from_u32_round_up(needed_object_size).to_u32()
 }

@@ -2,7 +2,10 @@
 
 use std::array;
 
-use crate::{allocator2::Allocator, ext, small_float::SmallFloat};
+use crate::{
+    allocator::{self, Allocator},
+    small_float::SmallFloat,
+};
 
 #[test]
 fn small_float_uint_to_float() {
@@ -269,7 +272,7 @@ fn ext_min_allocator_size() {
     ];
 
     for needed_object_size in TEST_OBJECT_SIZES {
-        let allocator_size = ext::min_allocator_size(needed_object_size);
+        let allocator_size = allocator::min_allocator_size(needed_object_size);
         let mut allocator: Allocator<u32> = Allocator::new(allocator_size);
         assert!(allocator.allocate(needed_object_size).is_some());
     }
