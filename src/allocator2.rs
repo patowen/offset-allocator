@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use log::debug;
 
-use crate::small_float;
+use crate::small_float::{self, SmallFloat};
 
 const NUM_TOP_BINS: usize = 32;
 const BINS_PER_LEAF: usize = 8;
@@ -93,6 +93,15 @@ pub struct Allocator<NI: NodeIndex = u32> {
     /// (Patrick) A stack of length `max_allocs` that stores free nodes by their index. Starts full, so that `node_index` 0 is popped first. The index of the top of the stack is `free_offset`.
     free_nodes: FreeNodeStack<NI>,
 }
+
+/// A map from each bin to the node at the head of the linked list for that bin. The name of this struct is `BinsMap` instead of `BinMap` to avoid confusion with binary maps.
+struct BinsMap<NI: NodeIndex> {
+    occupied_bins_top: u32,
+    occupied_bins: [u8; NUM_TOP_BINS],
+    head_nodes: [NodeIndexOption<NI>; NUM_LEAF_BINS],
+}
+
+impl<NI: NodeIndex> BinsMap<NI> {}
 
 struct NodeMap<NI: NodeIndex>(Vec<Node<NI>>);
 
@@ -288,8 +297,8 @@ where
         // Gives us min bin index that fits the size
         let min_bin_index = small_float::uint_to_float_round_up(size);
 
-        let min_top_bin_index = min_bin_index >> TOP_BINS_INDEX_SHIFT;
-        let min_leaf_bin_index = min_bin_index & LEAF_BINS_INDEX_MASK;
+        let min_top_bin_index = min_bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
+        let min_leaf_bin_index = min_bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
 
         let mut top_bin_index = min_top_bin_index;
         let mut leaf_bin_index = None;
@@ -459,18 +468,18 @@ where
         // Round down to bin index to ensure that bin >= alloc
         let bin_index = small_float::uint_to_float_round_down(size);
 
-        let top_bin_index = bin_index >> TOP_BINS_INDEX_SHIFT;
-        let leaf_bin_index = bin_index & LEAF_BINS_INDEX_MASK;
+        let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
+        let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
 
         // Bin was empty before?
-        if self.bin_indices[bin_index as usize].is_none() {
+        if self.bin_indices[bin_index.reinterpret_as_u32() as usize].is_none() {
             // Set bin mask bits
             self.used_bins[top_bin_index as usize] |= 1 << leaf_bin_index;
             self.used_bins_top |= 1 << top_bin_index;
         }
 
         // Take a freelist node and insert on top of the bin linked list (next = old top)
-        let top_node_index = self.bin_indices[bin_index as usize];
+        let top_node_index = self.bin_indices[bin_index.reinterpret_as_u32() as usize];
         let node_index = self.free_nodes.pop_required();
         self.nodes[node_index] = Node {
             data_offset,
@@ -481,7 +490,8 @@ where
         if let Some(top_node_index) = top_node_index.to_option() {
             self.nodes[top_node_index].bin_list_prev = NodeIndexOption::some(node_index);
         }
-        self.bin_indices[bin_index as usize] = NodeIndexOption::some(node_index);
+        self.bin_indices[bin_index.reinterpret_as_u32() as usize] =
+            NodeIndexOption::some(node_index);
 
         self.free_storage += size;
         debug!(
@@ -509,16 +519,18 @@ where
                 // Round down to bin index to ensure that bin >= alloc
                 let bin_index = small_float::uint_to_float_round_down(node.data_size);
 
-                let top_bin_index = (bin_index >> TOP_BINS_INDEX_SHIFT) as usize;
-                let leaf_bin_index = (bin_index & LEAF_BINS_INDEX_MASK) as usize;
+                let top_bin_index =
+                    (bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT) as usize;
+                let leaf_bin_index =
+                    (bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK) as usize;
 
-                self.bin_indices[bin_index as usize] = node.bin_list_next;
+                self.bin_indices[bin_index.reinterpret_as_u32() as usize] = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next.to_option() {
                     self.nodes[bin_list_next].bin_list_prev = NodeIndexOption::NONE;
                 }
 
                 // Bin empty?
-                if self.bin_indices[bin_index as usize].is_none() {
+                if self.bin_indices[bin_index.reinterpret_as_u32() as usize].is_none() {
                     // Remove a leaf bin mask bit
                     self.used_bins[top_bin_index as usize] &= !(1 << leaf_bin_index);
 
@@ -565,9 +577,9 @@ where
             let top_bin_index = 31 - self.used_bins_top.leading_zeros();
             let leaf_bin_index =
                 31 - (self.used_bins[top_bin_index as usize] as u32).leading_zeros();
-            largest_free_region = small_float::float_to_uint(
+            largest_free_region = small_float::float_to_uint(SmallFloat::reinterpret_u32(
                 (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
-            );
+            ));
             debug_assert!(self.free_storage >= largest_free_region);
         }
 
@@ -589,7 +601,7 @@ where
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
-                size: small_float::float_to_uint(i as u32),
+                size: small_float::float_to_uint(SmallFloat::reinterpret_u32(i as u32)),
                 count,
             }
         }

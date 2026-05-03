@@ -1,12 +1,27 @@
 // offset-allocator/src/small_float.rs
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmallFloat(u32);
+
+impl SmallFloat {
+    #[inline]
+    pub fn reinterpret_as_u32(self) -> u32 {
+        self.0
+    }
+
+    #[inline]
+    pub fn reinterpret_u32(data: u32) -> Self {
+        Self(data)
+    }
+}
+
 pub const MANTISSA_BITS: u32 = 3;
 pub const MANTISSA_VALUE: u32 = 1 << MANTISSA_BITS;
 pub const MANTISSA_MASK: u32 = MANTISSA_VALUE - 1;
 
 // Bin sizes follow floating point (exponent + mantissa) distribution (piecewise linear log approx)
 // This ensures that for each size class, the average overhead percentage stays the same
-pub fn uint_to_float_round_up(size: u32) -> u32 {
+pub fn uint_to_float_round_up(size: u32) -> SmallFloat {
     let mut exp = 0;
     let mut mantissa;
 
@@ -31,10 +46,10 @@ pub fn uint_to_float_round_up(size: u32) -> u32 {
     }
 
     // + allows mantissa->exp overflow for round up
-    (exp << MANTISSA_BITS) + mantissa
+    SmallFloat((exp << MANTISSA_BITS) + mantissa)
 }
 
-pub fn uint_to_float_round_down(size: u32) -> u32 {
+pub fn uint_to_float_round_down(size: u32) -> SmallFloat {
     let mut exp = 0;
     let mantissa;
 
@@ -51,12 +66,12 @@ pub fn uint_to_float_round_down(size: u32) -> u32 {
         mantissa = (size >> mantissa_start_bit) & MANTISSA_MASK;
     }
 
-    (exp << MANTISSA_BITS) | mantissa
+    SmallFloat((exp << MANTISSA_BITS) | mantissa)
 }
 
-pub fn float_to_uint(float_value: u32) -> u32 {
-    let exponent = float_value >> MANTISSA_BITS;
-    let mantissa = float_value & MANTISSA_MASK;
+pub fn float_to_uint(float_value: SmallFloat) -> u32 {
+    let exponent = float_value.0 >> MANTISSA_BITS;
+    let mantissa = float_value.0 & MANTISSA_MASK;
     if exponent == 0 {
         mantissa
     } else {

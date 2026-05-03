@@ -2,7 +2,7 @@
 
 use std::array;
 
-use crate::{allocator2::Allocator, ext, small_float};
+use crate::{allocator2::Allocator, ext, small_float::{self, SmallFloat}};
 
 #[test]
 fn small_float_uint_to_float() {
@@ -13,47 +13,47 @@ fn small_float_uint_to_float() {
     for i in 0..precise_number_count {
         let round_up = small_float::uint_to_float_round_up(i);
         let round_down = small_float::uint_to_float_round_down(i);
-        assert_eq!(i, round_up);
-        assert_eq!(i, round_down);
+        assert_eq!(SmallFloat::reinterpret_u32(i), round_up);
+        assert_eq!(SmallFloat::reinterpret_u32(i), round_down);
     }
 
     // Test some random picked numbers
     struct NumberFloatUpDown {
         number: u32,
-        up: u32,
-        down: u32,
+        up: SmallFloat,
+        down: SmallFloat,
     }
 
     let test_data = [
         NumberFloatUpDown {
             number: 17,
-            up: 17,
-            down: 16,
+            up: SmallFloat::reinterpret_u32(17),
+            down: SmallFloat::reinterpret_u32(16),
         },
         NumberFloatUpDown {
             number: 118,
-            up: 39,
-            down: 38,
+            up: SmallFloat::reinterpret_u32(39),
+            down: SmallFloat::reinterpret_u32(38),
         },
         NumberFloatUpDown {
             number: 1024,
-            up: 64,
-            down: 64,
+            up: SmallFloat::reinterpret_u32(64),
+            down: SmallFloat::reinterpret_u32(64),
         },
         NumberFloatUpDown {
             number: 65536,
-            up: 112,
-            down: 112,
+            up: SmallFloat::reinterpret_u32(112),
+            down: SmallFloat::reinterpret_u32(112),
         },
         NumberFloatUpDown {
             number: 529445,
-            up: 137,
-            down: 136,
+            up: SmallFloat::reinterpret_u32(137),
+            down: SmallFloat::reinterpret_u32(136),
         },
         NumberFloatUpDown {
             number: 1048575,
-            up: 144,
-            down: 143,
+            up: SmallFloat::reinterpret_u32(144),
+            down: SmallFloat::reinterpret_u32(143),
         },
     ];
 
@@ -72,13 +72,13 @@ fn small_float_float_to_uint() {
     // If this test fails, please change this assumption!
     let precise_number_count = 17;
     for i in 0..precise_number_count {
-        let v = small_float::float_to_uint(i);
+        let v = small_float::float_to_uint(SmallFloat::reinterpret_u32(i));
         assert_eq!(i, v);
     }
 
     // Test that float->uint->float conversion is precise for all numbers
     // NOTE: Test values < 240. 240->4G = overflows 32 bit integer
-    for i in 0..240 {
+    for i in (0..240).map(|i| SmallFloat::reinterpret_u32(i)) {
         let v = small_float::float_to_uint(i);
         let round_up = small_float::uint_to_float_round_up(v);
         let round_down = small_float::uint_to_float_round_down(v);
