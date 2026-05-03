@@ -1,9 +1,15 @@
 // offset-allocator/src/small_float.rs
 
+pub const NUM_LEAF_BINS: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmallFloat(u32);
 
 impl SmallFloat {
+    pub fn values() -> impl ExactSizeIterator<Item = Self> {
+        (0..(NUM_LEAF_BINS as u32)).map(|i| Self(i))
+    }
+
     #[inline]
     pub fn reinterpret_as_u32(self) -> u32 {
         self.0
@@ -12,6 +18,29 @@ impl SmallFloat {
     #[inline]
     pub fn reinterpret_u32(data: u32) -> Self {
         Self(data)
+    }
+}
+
+#[derive(Debug)]
+pub struct SmallFloatMap<T>([T; NUM_LEAF_BINS]);
+
+impl<T: Default + Copy> Default for SmallFloatMap<T> {
+    fn default() -> Self {
+        Self([T::default(); NUM_LEAF_BINS])
+    }
+}
+
+impl<T> std::ops::Index<SmallFloat> for SmallFloatMap<T> {
+    type Output = T;
+
+    fn index(&self, index: SmallFloat) -> &Self::Output {
+        &self.0[index.0 as usize]
+    }
+}
+
+impl<T> std::ops::IndexMut<SmallFloat> for SmallFloatMap<T> {
+    fn index_mut(&mut self, index: SmallFloat) -> &mut Self::Output {
+        &mut self.0[index.0 as usize]
     }
 }
 

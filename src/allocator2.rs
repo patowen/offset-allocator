@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use log::debug;
 
-use crate::small_float::{self, SmallFloat};
+use crate::small_float::{self, SmallFloat, SmallFloatMap};
 
 const NUM_TOP_BINS: usize = 32;
 const BINS_PER_LEAF: usize = 8;
@@ -94,7 +94,7 @@ struct BinsMap<NI: NodeIndex> {
     /// (Patrick) An array of 32 bit-vectors showing which `leaf_bin_index`es are "used" for the given top bin, usually indexed by `top_bin_index`
     occupied_bins: [u8; NUM_TOP_BINS],
     /// (Patrick) An array of 256 `node_index`es (each being a head of a doubly-linked list of nodes in that bin), usually indexed by `bin_index` (a combo of `top_bin_index` and `leaf_bin_index`).
-    head_nodes: [NodeIndexOption<NI>; NUM_LEAF_BINS],
+    head_nodes: SmallFloatMap<NodeIndexOption<NI>>,
 }
 
 impl<NI: NodeIndex> Default for BinsMap<NI> {
@@ -102,7 +102,7 @@ impl<NI: NodeIndex> Default for BinsMap<NI> {
         Self {
             occupied_bins_top: 0,
             occupied_bins: [0; NUM_TOP_BINS],
-            head_nodes: [NodeIndexOption::NONE; NUM_LEAF_BINS],
+            head_nodes: SmallFloatMap::default(),
         }
     }
 }
@@ -184,13 +184,13 @@ impl<NI: NodeIndex> std::ops::Index<SmallFloat> for BinsMap<NI> {
     type Output = NodeIndexOption<NI>;
 
     fn index(&self, index: SmallFloat) -> &Self::Output {
-        &self.head_nodes[index.reinterpret_as_u32() as usize]
+        &self.head_nodes[index]
     }
 }
 
 impl<NI: NodeIndex> std::ops::IndexMut<SmallFloat> for BinsMap<NI> {
     fn index_mut(&mut self, index: SmallFloat) -> &mut Self::Output {
-        &mut self.head_nodes[index.reinterpret_as_u32() as usize]
+        &mut self.head_nodes[index]
     }
 }
 
@@ -275,7 +275,7 @@ pub struct StorageReport {
 #[derive(Debug)]
 pub struct StorageReportFull {
     /// Each bin within the allocator.
-    pub free_regions: [StorageReportFullRegion; NUM_LEAF_BINS],
+    pub free_regions: SmallFloatMap<StorageReportFullRegion>,
 }
 
 /// A detailed accounting of each allocator bin.
@@ -622,15 +622,15 @@ where
     /// bin.
     pub fn storage_report_full(&self) -> StorageReportFull {
         let mut report = StorageReportFull::default();
-        for i in 0..NUM_LEAF_BINS {
+        for i in SmallFloat::values() {
             let mut count = 0;
-            let mut maybe_node_index = self.bins_map[SmallFloat::reinterpret_u32(i as u32)];
+            let mut maybe_node_index = self.bins_map[i];
             while let Some(node_index) = maybe_node_index.to_option() {
                 maybe_node_index = self.nodes[node_index].bin_list_next;
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
-                size: small_float::float_to_uint(SmallFloat::reinterpret_u32(i as u32)),
+                size: small_float::float_to_uint(i),
                 count,
             }
         }
@@ -641,7 +641,7 @@ where
 impl Default for StorageReportFull {
     fn default() -> Self {
         Self {
-            free_regions: [Default::default(); NUM_LEAF_BINS],
+            free_regions: SmallFloatMap::default(),
         }
     }
 }
