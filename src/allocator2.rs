@@ -8,7 +8,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use log::debug;
 
-use crate::small_float::{self, SmallFloat, SmallFloatMap};
+use crate::small_float::{SmallFloat, SmallFloatMap};
 
 const NUM_TOP_BINS: usize = 32;
 const BINS_PER_LEAF: usize = 8;
@@ -148,9 +148,8 @@ impl<NI: NodeIndex> BinsMap<NI> {
         if self.occupied_bins_top == 0 {
             return None;
         }
-        let top_bin_index = 31 - self.occupied_bins_top.leading_zeros();
-        let leaf_bin_index =
-            31 - (self.occupied_bins[top_bin_index as usize] as u32).leading_zeros();
+        let top_bin_index = self.occupied_bins_top.ilog2();
+        let leaf_bin_index = (self.occupied_bins[top_bin_index as usize] as u32).ilog2();
         Some(SmallFloat::reinterpret_u32(
             (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
         ))
@@ -384,7 +383,7 @@ where
 
         // Round up to bin index to ensure that alloc >= bin
         // Gives us min bin index that fits the size
-        let min_bin_index = small_float::uint_to_float_round_up(size);
+        let min_bin_index = SmallFloat::from_u32_round_up(size);
         let bin_index = self.bins_map.min_occupied_since(min_bin_index)?;
 
         // Pop the top node of the bin. Bin top = node.next.
@@ -517,7 +516,7 @@ where
 
     fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI {
         // Round down to bin index to ensure that bin >= alloc
-        let bin_index = small_float::uint_to_float_round_down(size);
+        let bin_index = SmallFloat::from_u32_round_down(size);
 
         // Bin was empty before?
         if self.bins_map[bin_index].is_none() {
@@ -563,7 +562,7 @@ where
                 // Hard case: We are the first node in a bin. Find the bin.
 
                 // Round down to bin index to ensure that bin >= alloc
-                let bin_index = small_float::uint_to_float_round_down(node.data_size);
+                let bin_index = SmallFloat::from_u32_round_down(node.data_size);
 
                 self.bins_map[bin_index] = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next.to_option() {
@@ -606,10 +605,7 @@ where
             };
         }
 
-        let largest_free_region = self
-            .bins_map
-            .max_occupied()
-            .map_or(0, |x| small_float::float_to_uint(x));
+        let largest_free_region = self.bins_map.max_occupied().map_or(0, |x| x.to_u32());
         debug_assert!(self.free_storage >= largest_free_region);
 
         StorageReport {
@@ -630,7 +626,7 @@ where
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
-                size: small_float::float_to_uint(i),
+                size: i.to_u32(),
                 count,
             }
         }

@@ -2,7 +2,7 @@
 
 use std::array;
 
-use crate::{allocator2::Allocator, ext, small_float::{self, SmallFloat}};
+use crate::{allocator2::Allocator, ext, small_float::SmallFloat};
 
 #[test]
 fn small_float_uint_to_float() {
@@ -11,8 +11,8 @@ fn small_float_uint_to_float() {
     // If this test fails, please change this assumption!
     let precise_number_count = 17;
     for i in 0..precise_number_count {
-        let round_up = small_float::uint_to_float_round_up(i);
-        let round_down = small_float::uint_to_float_round_down(i);
+        let round_up = SmallFloat::from_u32_round_up(i);
+        let round_down = SmallFloat::from_u32_round_down(i);
         assert_eq!(SmallFloat::reinterpret_u32(i), round_up);
         assert_eq!(SmallFloat::reinterpret_u32(i), round_down);
     }
@@ -58,8 +58,8 @@ fn small_float_uint_to_float() {
     ];
 
     for v in test_data {
-        let round_up = small_float::uint_to_float_round_up(v.number);
-        let round_down = small_float::uint_to_float_round_down(v.number);
+        let round_up = SmallFloat::from_u32_round_up(v.number);
+        let round_down = SmallFloat::from_u32_round_down(v.number);
         assert_eq!(round_up, v.up);
         assert_eq!(round_down, v.down);
     }
@@ -72,16 +72,16 @@ fn small_float_float_to_uint() {
     // If this test fails, please change this assumption!
     let precise_number_count = 17;
     for i in 0..precise_number_count {
-        let v = small_float::float_to_uint(SmallFloat::reinterpret_u32(i));
+        let v = SmallFloat::reinterpret_u32(i).to_u32();
         assert_eq!(i, v);
     }
 
     // Test that float->uint->float conversion is precise for all numbers
     // NOTE: Test values < 240. 240->4G = overflows 32 bit integer
     for i in (0..240).map(|i| SmallFloat::reinterpret_u32(i)) {
-        let v = small_float::float_to_uint(i);
-        let round_up = small_float::uint_to_float_round_up(v);
-        let round_down = small_float::uint_to_float_round_down(v);
+        let v = i.to_u32();
+        let round_up = SmallFloat::from_u32_round_up(v);
+        let round_down = SmallFloat::from_u32_round_down(v);
         assert_eq!(i, round_up);
         assert_eq!(i, round_down);
     }
@@ -278,7 +278,7 @@ fn ext_min_allocator_size() {
 #[test]
 fn test_allocator() {
     let mut allocator: Allocator<u32> = Allocator::with_max_allocs(513, 5);
-    let result1 = allocator.allocate(513-15);
+    let result1 = allocator.allocate(513 - 15);
     assert!(result1.is_some());
     let result2 = allocator.allocate(13);
     assert!(result2.is_some());
