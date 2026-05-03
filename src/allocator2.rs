@@ -75,10 +75,7 @@ impl<NI: NodeIndex> Default for NodeIndexOption<NI> {
 
 /// An allocator that manages a single contiguous chunk of space and hands out
 /// portions of it as requested.
-pub struct Allocator<NI = u32>
-where
-    NI: NodeIndex,
-{
+pub struct Allocator<NI: NodeIndex = u32> {
     size: u32,
     max_allocs: u32,
     /// How much available space there is across all nodes
@@ -94,9 +91,41 @@ where
     /// (Patrick) A vector of length `max_allocs`, usually indexed by `node_index`
     nodes: Vec<Node<NI>>,
     /// (Patrick) A stack of length `max_allocs` that stores free nodes by their index. Starts full, so that `node_index` 0 is popped first. The index of the top of the stack is `free_offset`.
-    free_nodes: Vec<NI>,
-    /// (Patrick) Points to the top of the `free_nodes` stack. (TODO: Is there an off-by-one error here?)
-    free_offset: u32,
+    free_nodes: FreeNodeStack<NI>,
+}
+
+struct FreeNodeStack<NI: NodeIndex>(Vec<NI>);
+
+impl<NI: NodeIndex> FreeNodeStack<NI> {
+    fn with_max_allocs(max_allocs: u32) -> Self {
+        Self((0..max_allocs).rev().map(|i| NI::from_u32(i)).collect())
+    }
+
+    #[inline]
+    fn is_exhausted(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
+    fn push(&mut self, node_index: NI) {
+        debug!(
+            "Putting node {} into freelist[{}] (free)",
+            node_index,
+            self.0.len()
+        );
+        self.0.push(node_index);
+    }
+
+    #[inline]
+    fn pop_required(&mut self) -> NI {
+        let node_index = self.0.pop().expect("Stack must not be exhausted");
+        debug!(
+            "Getting node {} from freelist[{}]",
+            node_index,
+            self.0.len()
+        );
+        node_index
+    }
 }
 
 /// A single allocation.
@@ -208,39 +237,18 @@ where
             max_allocs,
             free_storage: 0,
             used_bins_top: 0,
-            free_offset: 0,
             used_bins: [0; NUM_TOP_BINS],
             bin_indices: [NodeIndexOption::NONE; NUM_LEAF_BINS],
-            nodes: vec![],
-            free_nodes: vec![],
+            nodes: vec![Node::default(); max_allocs as usize],
+            free_nodes: FreeNodeStack::with_max_allocs(max_allocs),
         };
-        this.reset();
+        this.insert_node_into_bin(size, 0);
         this
     }
 
     /// Clears out all allocations.
     pub fn reset(&mut self) {
-        self.free_storage = 0;
-        self.used_bins_top = 0;
-        self.free_offset = self.max_allocs - 1;
-
-        self.used_bins.iter_mut().for_each(|bin| *bin = 0);
-
-        self.bin_indices
-            .iter_mut()
-            .for_each(|index| *index = NodeIndexOption::NONE);
-
-        self.nodes = vec![Node::default(); self.max_allocs as usize];
-
-        // Freelist is a stack. Nodes in inverse order so that [0] pops first.
-        self.free_nodes = (0..self.max_allocs)
-            .rev()
-            .map(|i| NI::from_u32(i))
-            .collect();
-
-        // Start state: Whole storage as one big node
-        // Algorithm will split remainders and push them back as smaller nodes
-        self.insert_node_into_bin(self.size, 0);
+        *self = Self::with_max_allocs(self.size, self.max_allocs);
     }
 
     /// Allocates a block of `size` elements and returns its allocation.
@@ -249,7 +257,8 @@ where
     /// None.
     pub fn allocate(&mut self, size: u32) -> Option<Allocation<NI>> {
         // Out of allocations?
-        if self.free_offset == 0 {
+        if self.free_nodes.is_exhausted() {
+            // TODO: Do we want to allow an allocation that doesn't create a new node?
             return None;
         }
 
@@ -409,13 +418,7 @@ where
         } = self.nodes[node_index.to_usize()];
 
         // Insert the removed node to freelist
-        debug!(
-            "Putting node {} into freelist[{}] (free)",
-            node_index,
-            self.free_offset + 1
-        );
-        self.free_offset += 1;
-        self.free_nodes[self.free_offset as usize] = node_index;
+        self.free_nodes.push(node_index);
 
         // Insert the (combined) free node to bin
         let combined_node_index = self.insert_node_into_bin(size, offset);
@@ -451,14 +454,7 @@ where
 
         // Take a freelist node and insert on top of the bin linked list (next = old top)
         let top_node_index = self.bin_indices[bin_index as usize];
-        let free_offset = self.free_offset;
-        let node_index = self.free_nodes[free_offset as usize];
-        self.free_offset -= 1;
-        debug!(
-            "Getting node {} from freelist[{}]",
-            node_index,
-            self.free_offset + 1
-        );
+        let node_index = self.free_nodes.pop_required();
         self.nodes[node_index.to_usize()] = Node {
             data_offset,
             data_size: size,
@@ -519,13 +515,7 @@ where
         }
 
         // Insert the node to freelist
-        debug!(
-            "Putting node {} into freelist[{}] (remove_node_from_bin)",
-            node_index,
-            self.free_offset + 1
-        );
-        self.free_offset += 1;
-        self.free_nodes[self.free_offset as usize] = node_index;
+        self.free_nodes.push(node_index);
 
         self.free_storage -= node.data_size;
         debug!(
@@ -548,25 +538,27 @@ where
     /// Returns a structure containing the amount of free space remaining, as
     /// well as the largest amount that can be allocated at once.
     pub fn storage_report(&self) -> StorageReport {
-        let mut largest_free_region = 0;
-        let mut free_storage = 0;
+        if self.free_nodes.is_exhausted() {
+            // Out of allocations? -> Zero free space
+            return StorageReport {
+                total_free_space: 0,
+                largest_free_region: 0,
+            };
+        }
 
-        // Out of allocations? -> Zero free space
-        if self.free_offset > 0 {
-            free_storage = self.free_storage;
-            if self.used_bins_top > 0 {
-                let top_bin_index = 31 - self.used_bins_top.leading_zeros();
-                let leaf_bin_index =
-                    31 - (self.used_bins[top_bin_index as usize] as u32).leading_zeros();
-                largest_free_region = small_float::float_to_uint(
-                    (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
-                );
-                debug_assert!(free_storage >= largest_free_region);
-            }
+        let mut largest_free_region = 0;
+        if self.used_bins_top > 0 {
+            let top_bin_index = 31 - self.used_bins_top.leading_zeros();
+            let leaf_bin_index =
+                31 - (self.used_bins[top_bin_index as usize] as u32).leading_zeros();
+            largest_free_region = small_float::float_to_uint(
+                (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
+            );
+            debug_assert!(self.free_storage >= largest_free_region);
         }
 
         StorageReport {
-            total_free_space: free_storage,
+            total_free_space: self.free_storage,
             largest_free_region,
         }
     }
