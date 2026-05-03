@@ -13,4 +13,3 @@ keywords = ["memory-management"]
 
 [dependencies]
 log = "0.4"
-nonmax = "0.5"

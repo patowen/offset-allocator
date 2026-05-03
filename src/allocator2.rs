@@ -4,72 +4,15 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 
 use log::debug;
 
-use crate::small_float::{SmallFloat, SmallFloatMap};
-
-const NUM_TOP_BINS: usize = 32;
-const TOP_BINS_INDEX_SHIFT: u32 = 3;
-const LEAF_BINS_INDEX_MASK: u32 = 7;
-
-/// Determines the number of allocations that the allocator supports.
-///
-/// By default, [`Allocator`] and related functions use `u32`, which allows for
-/// `u32::MAX - 1` allocations. You can, however, use `u16` instead, which
-/// causes the allocator to use less memory but limits the number of allocations
-/// within a single allocator to at most 65,534.
-pub trait NodeIndex: Display + Debug + Clone + Copy + PartialEq + Eq {
-    /// An invalid representation in its type, used as the `None` type of `NodeIndexOption`.
-    const INVALID: Self;
-
-    /// The number of indexes, consectuive starting from 0, that are valid representations
-    const NUM_VALID: u32;
-
-    /// Converts from a unsigned 32-bit integer to an instance of this type.
-    fn from_u32(val: u32) -> Self;
-
-    /// Converts this type to an unsigned machine word.
-    fn to_usize(self) -> usize;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NodeIndexOption<NI: NodeIndex>(NI);
-
-impl<NI: NodeIndex> NodeIndexOption<NI> {
-    const NONE: Self = NodeIndexOption(NodeIndex::INVALID);
-
-    fn some(inner: NI) -> Self {
-        Self(inner)
-    }
-
-    #[inline]
-    fn to_option(self) -> Option<NI> {
-        if self == Self::NONE {
-            None
-        } else {
-            Some(self.0)
-        }
-    }
-
-    #[inline]
-    fn is_none(self) -> bool {
-        self == Self::NONE
-    }
-
-    #[inline]
-    fn unwrap(self) -> NI {
-        assert!(self != Self::NONE);
-        self.0
-    }
-}
-
-impl<NI: NodeIndex> Default for NodeIndexOption<NI> {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
+use crate::{
+    bins_map::BinsMap,
+    node_index::{NodeIndex, NodeIndexOption},
+    small_float::{SmallFloat, SmallFloatMap},
+};
 
 /// An allocator that manages a single contiguous chunk of space and hands out
 /// portions of it as requested.
@@ -83,112 +26,6 @@ pub struct Allocator<NI: NodeIndex = u32> {
 
     nodes: NodeMap<NI>,
     free_nodes: FreeNodeStack<NI>,
-}
-
-/// A map from each bin to the node at the head of the linked list for that bin. The name of this struct is `BinsMap` instead of `BinMap` to avoid confusion with binary maps.
-struct BinsMap<NI: NodeIndex> {
-    /// (Patrick) A bit-vector showing which `top_bin_index`es are "used"
-    occupied_bins_top: u32,
-    /// (Patrick) An array of 32 bit-vectors showing which `leaf_bin_index`es are "used" for the given top bin, usually indexed by `top_bin_index`
-    occupied_bins: [u8; NUM_TOP_BINS],
-    /// (Patrick) An array of 256 `node_index`es (each being a head of a doubly-linked list of nodes in that bin), usually indexed by `bin_index` (a combo of `top_bin_index` and `leaf_bin_index`).
-    head_nodes: SmallFloatMap<NodeIndexOption<NI>>,
-}
-
-impl<NI: NodeIndex> Default for BinsMap<NI> {
-    fn default() -> Self {
-        Self {
-            occupied_bins_top: 0,
-            occupied_bins: [0; NUM_TOP_BINS],
-            head_nodes: SmallFloatMap::default(),
-        }
-    }
-}
-
-impl<NI: NodeIndex> BinsMap<NI> {
-    fn min_occupied_since(&self, min: SmallFloat) -> Option<SmallFloat> {
-        let min_top_bin_index = min.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
-        let min_leaf_bin_index = min.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
-
-        let mut top_bin_index = min_top_bin_index;
-        let mut leaf_bin_index = None;
-
-        // If top bin exists, scan its leaf bin. This can fail (NO_SPACE).
-        if (self.occupied_bins_top & (1 << top_bin_index)) != 0 {
-            leaf_bin_index = find_lowest_bit_set_after(
-                self.occupied_bins[top_bin_index as usize] as _,
-                min_leaf_bin_index,
-            );
-        }
-
-        // If we didn't find space in top bin, we search top bin from +1
-        let leaf_bin_index = match leaf_bin_index {
-            Some(leaf_bin_index) => leaf_bin_index,
-            None => {
-                top_bin_index =
-                    find_lowest_bit_set_after(self.occupied_bins_top, min_top_bin_index + 1)?;
-
-                // All leaf bins here fit the alloc, since the top bin was
-                // rounded up. Start leaf search from bit 0.
-                //
-                // NOTE: This search can't fail since at least one leaf bit was
-                // set because the top bit was set.
-                self.occupied_bins[top_bin_index as usize].trailing_zeros()
-            }
-        };
-
-        Some(SmallFloat::reinterpret_u32(
-            (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
-        ))
-    }
-
-    fn max_occupied(&self) -> Option<SmallFloat> {
-        if self.occupied_bins_top == 0 {
-            return None;
-        }
-        let top_bin_index = self.occupied_bins_top.ilog2();
-        let leaf_bin_index = (self.occupied_bins[top_bin_index as usize] as u32).ilog2();
-        Some(SmallFloat::reinterpret_u32(
-            (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
-        ))
-    }
-
-    fn mark_bin_empty(&mut self, bin_index: SmallFloat) {
-        let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
-        let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
-
-        // Remove a leaf bin mask bit
-        self.occupied_bins[top_bin_index as usize] &= !(1 << u32::from(leaf_bin_index));
-
-        // All leaf bins empty?
-        if self.occupied_bins[top_bin_index as usize] == 0 {
-            // Remove a top bin mask bit
-            self.occupied_bins_top &= !(1 << top_bin_index);
-        }
-    }
-
-    fn mark_bin_occupied(&mut self, bin_index: SmallFloat) {
-        let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
-        let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
-
-        // Set bin mask bits
-        self.occupied_bins[top_bin_index as usize] |= 1 << leaf_bin_index;
-        self.occupied_bins_top |= 1 << top_bin_index;
-    }
-}
-
-impl<NI: NodeIndex> std::ops::Index<SmallFloat> for BinsMap<NI> {
-    type Output = NodeIndexOption<NI>;
-
-    fn index(&self, index: SmallFloat) -> &Self::Output {
-        &self.head_nodes[index]
-    }
-}
-
-impl<NI: NodeIndex> std::ops::IndexMut<SmallFloat> for BinsMap<NI> {
-    fn index_mut(&mut self, index: SmallFloat) -> &mut Self::Output {
-        &mut self.head_nodes[index]
-    }
 }
 
 struct NodeMap<NI: NodeIndex>(Vec<Node<NI>>);
@@ -249,10 +86,7 @@ impl<NI: NodeIndex> FreeNodeStack<NI> {
 
 /// A single allocation.
 #[derive(Clone, Copy)]
-pub struct Allocation<NI = u32>
-where
-    NI: NodeIndex,
-{
+pub struct Allocation<NI: NodeIndex = u32> {
     /// The location of this allocation within the buffer.
     pub offset: u32,
     /// The node index associated with this allocation.
@@ -316,19 +150,6 @@ impl<NI: NodeIndex> Default for Node<NI> {
             neighbor_next: Default::default(),
             used: Default::default(),
         }
-    }
-}
-
-// Utility functions
-/// Find the lowest bit that is set to 1, as long as it's at least start_bit_index. Return `None` if there is no such bit.
-fn find_lowest_bit_set_after(bit_mask: u32, start_bit_index: u32) -> Option<u32> {
-    let mask_before_start_index = (1 << start_bit_index) - 1;
-    let mask_after_start_index = !mask_before_start_index;
-    let bits_after = bit_mask & mask_after_start_index;
-    if bits_after == 0 {
-        None
-    } else {
-        Some(bits_after.trailing_zeros())
     }
 }
 
@@ -646,35 +467,5 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.storage_report().fmt(f)
-    }
-}
-
-impl NodeIndex for u32 {
-    const INVALID: u32 = u32::MAX;
-
-    const NUM_VALID: u32 = Self::INVALID;
-
-    fn from_u32(val: u32) -> Self {
-        assert!(val < Self::NUM_VALID);
-        val
-    }
-
-    fn to_usize(self) -> usize {
-        self as usize
-    }
-}
-
-impl NodeIndex for u16 {
-    const INVALID: u16 = u16::MAX;
-
-    const NUM_VALID: u32 = Self::INVALID as u32;
-
-    fn from_u32(val: u32) -> Self {
-        assert!(val < Self::NUM_VALID);
-        val as u16
-    }
-
-    fn to_usize(self) -> usize {
-        self as usize
     }
 }
