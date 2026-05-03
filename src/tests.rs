@@ -2,7 +2,7 @@
 
 use std::array;
 
-use crate::{ext, small_float, Allocator};
+use crate::{allocator2::Allocator, ext, small_float};
 
 #[test]
 fn small_float_uint_to_float() {
@@ -89,9 +89,9 @@ fn small_float_float_to_uint() {
 
 #[test]
 fn basic_offset_allocator() {
-    let mut allocator = Allocator::new(1024 * 1024 * 256);
+    let mut allocator: Allocator = Allocator::new(1024 * 1024 * 256);
     let a = allocator.allocate(1337).unwrap();
-    let offset: u32 = a.offset;
+    let offset = a.offset;
     assert_eq!(offset, 0);
     allocator.free(a);
 }
@@ -273,4 +273,15 @@ fn ext_min_allocator_size() {
         let mut allocator: Allocator<u32> = Allocator::new(allocator_size);
         assert!(allocator.allocate(needed_object_size).is_some());
     }
+}
+
+#[test]
+fn test_allocator() {
+    let mut allocator: Allocator<u32> = Allocator::with_max_allocs(513, 5);
+    let result1 = allocator.allocate(513-15);
+    assert!(result1.is_some());
+    let result2 = allocator.allocate(13);
+    assert!(result2.is_some());
+    let result3 = allocator.allocate(2);
+    assert!(result3.is_some());
 }

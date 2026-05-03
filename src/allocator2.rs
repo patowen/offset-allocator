@@ -7,15 +7,8 @@
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 
 use log::debug;
-use nonmax::{NonMaxU16, NonMaxU32};
 
-pub mod ext;
-pub mod allocator2;
-
-mod small_float;
-
-#[cfg(test)]
-mod tests;
+use crate::small_float;
 
 const NUM_TOP_BINS: usize = 32;
 const BINS_PER_LEAF: usize = 8;
@@ -29,14 +22,12 @@ const NUM_LEAF_BINS: usize = NUM_TOP_BINS * BINS_PER_LEAF;
 /// `u32::MAX - 1` allocations. You can, however, use `u16` instead, which
 /// causes the allocator to use less memory but limits the number of allocations
 /// within a single allocator to at most 65,534.
-pub trait NodeIndex: Clone + Copy + Default {
-    /// The `NonMax` version of this type.
-    ///
-    /// This is used extensively to optimize `enum` representations.
-    type NonMax: NodeIndexNonMax + TryFrom<Self> + Into<Self>;
+pub trait NodeIndex: Display + Debug + Clone + Copy + PartialEq + Eq {
+    /// An invalid representation in its type, used as the `None` type of `NodeIndexOption`.
+    const INVALID: Self;
 
-    /// The maximum value representable in this type.
-    const MAX: u32;
+    /// The number of indexes, consectuive starting from 0, that are valid representations
+    const NUM_VALID: u32;
 
     /// Converts from a unsigned 32-bit integer to an instance of this type.
     fn from_u32(val: u32) -> Self;
@@ -45,12 +36,41 @@ pub trait NodeIndex: Clone + Copy + Default {
     fn to_usize(self) -> usize;
 }
 
-/// The `NonMax` version of the [`NodeIndex`].
-///
-/// For example, for `u32`, the `NonMax` version is [`NonMaxU32`].
-pub trait NodeIndexNonMax: Clone + Copy + PartialEq + Default + Debug + Display {
-    /// Converts this type to an unsigned machine word.
-    fn to_usize(self) -> usize;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NodeIndexOption<NI: NodeIndex>(NI);
+
+impl<NI: NodeIndex> NodeIndexOption<NI> {
+    const NONE: Self = NodeIndexOption(NodeIndex::INVALID);
+
+    fn some(inner: NI) -> Self {
+        Self(inner)
+    }
+
+    #[inline]
+    fn to_option(self) -> Option<NI> {
+        if self == Self::NONE {
+            None
+        } else {
+            Some(self.0)
+        }
+    }
+
+    #[inline]
+    fn is_none(self) -> bool {
+        self == Self::NONE
+    }
+
+    #[inline]
+    fn unwrap(self) -> NI {
+        assert!(self != Self::NONE);
+        self.0
+    }
+}
+
+impl<NI: NodeIndex> Default for NodeIndexOption<NI> {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 /// An allocator that manages a single contiguous chunk of space and hands out
@@ -69,12 +89,12 @@ where
     /// (Patrick) An array of 32 bit-vectors showing which `leaf_bin_index`es are "used" for the given top bin, usually indexed by `top_bin_index`
     used_bins: [u8; NUM_TOP_BINS],
     /// (Patrick) An array of 256 `node_index`es (each being a head of a doubly-linked list of nodes in that bin), usually indexed by `bin_index` (a combo of `top_bin_index` and `leaf_bin_index`).
-    bin_indices: [Option<NI::NonMax>; NUM_LEAF_BINS],
+    bin_indices: [NodeIndexOption<NI>; NUM_LEAF_BINS],
 
     /// (Patrick) A vector of length `max_allocs`, usually indexed by `node_index`
     nodes: Vec<Node<NI>>,
     /// (Patrick) A stack of length `max_allocs` that stores free nodes by their index. Starts full, so that `node_index` 0 is popped first. The index of the top of the stack is `free_offset`.
-    free_nodes: Vec<NI::NonMax>,
+    free_nodes: Vec<NI>,
     /// (Patrick) Points to the top of the `free_nodes` stack. (TODO: Is there an off-by-one error here?)
     free_offset: u32,
 }
@@ -85,10 +105,10 @@ pub struct Allocation<NI = u32>
 where
     NI: NodeIndex,
 {
-    /// The location of this allocation within the buffer. (Patrick) This should be a u32, not an NI.
+    /// The location of this allocation within the buffer.
     pub offset: u32,
     /// The node index associated with this allocation.
-    metadata: NI::NonMax,
+    metadata: NI,
 }
 
 /// Provides a summary of the state of the allocator, including space remaining.
@@ -116,7 +136,7 @@ pub struct StorageReportFullRegion {
     pub count: u32,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct Node<NI = u32>
 where
     NI: NodeIndex,
@@ -126,27 +146,41 @@ where
     /// The size of the node in the address space of the heap
     data_size: u32,
     /// (Patrick) Part of a linked list. Stores the previous `node_index` in the same bin
-    bin_list_prev: Option<NI::NonMax>,
+    bin_list_prev: NodeIndexOption<NI>,
     /// (Patrick) Part of a linked list. Stores the next `node_index` in the same bin
-    bin_list_next: Option<NI::NonMax>,
+    bin_list_next: NodeIndexOption<NI>,
     /// (Patrick) Part of a linked list. Stores the previous `node_index` contiguously in memory
-    neighbor_prev: Option<NI::NonMax>,
+    neighbor_prev: NodeIndexOption<NI>,
     /// (Patrick) Part of a linked list. Stores the next `node_index` contiguously in memory
-    neighbor_next: Option<NI::NonMax>,
+    neighbor_next: NodeIndexOption<NI>,
     /// (Patrick) Whether the node is used in an active allocation (rather than being a free slot). If `true`, this node is no longer in a bin.
     used: bool, // TODO: Merge as bit flag
 }
 
+impl<NI: NodeIndex> Default for Node<NI> {
+    fn default() -> Self {
+        Self {
+            data_offset: Default::default(),
+            data_size: Default::default(),
+            bin_list_prev: Default::default(),
+            bin_list_next: Default::default(),
+            neighbor_prev: Default::default(),
+            neighbor_next: Default::default(),
+            used: Default::default(),
+        }
+    }
+}
+
 // Utility functions
 /// Find the lowest bit that is set to 1, as long as it's at least start_bit_index. Return `None` if there is no such bit.
-fn find_lowest_bit_set_after(bit_mask: u32, start_bit_index: u32) -> Option<NonMaxU32> {
+fn find_lowest_bit_set_after(bit_mask: u32, start_bit_index: u32) -> Option<u32> {
     let mask_before_start_index = (1 << start_bit_index) - 1;
     let mask_after_start_index = !mask_before_start_index;
     let bits_after = bit_mask & mask_after_start_index;
     if bits_after == 0 {
         None
     } else {
-        NonMaxU32::try_from(bits_after.trailing_zeros()).ok()
+        Some(bits_after.trailing_zeros())
     }
 }
 
@@ -157,7 +191,7 @@ where
     /// Creates a new allocator, managing a contiguous block of memory of `size`
     /// units, with a default reasonable number of maximum allocations.
     pub fn new(size: u32) -> Self {
-        Allocator::with_max_allocs(size, u32::min(128 * 1024, NI::MAX - 1))
+        Allocator::with_max_allocs(size, u32::min(128 * 1024, NI::NUM_VALID))
     }
 
     /// Creates a new allocator, managing a contiguous block of memory of `size`
@@ -167,7 +201,7 @@ where
     /// [`NodeIndex::MAX`] minus one. If this restriction is violated, this
     /// constructor will panic.
     pub fn with_max_allocs(size: u32, max_allocs: u32) -> Self {
-        assert!(max_allocs < NI::MAX - 1);
+        assert!(max_allocs < NI::NUM_VALID);
 
         let mut this = Self {
             size,
@@ -176,7 +210,7 @@ where
             used_bins_top: 0,
             free_offset: 0,
             used_bins: [0; NUM_TOP_BINS],
-            bin_indices: [None; NUM_LEAF_BINS],
+            bin_indices: [NodeIndexOption::NONE; NUM_LEAF_BINS],
             nodes: vec![],
             free_nodes: vec![],
         };
@@ -192,15 +226,16 @@ where
 
         self.used_bins.iter_mut().for_each(|bin| *bin = 0);
 
-        self.bin_indices.iter_mut().for_each(|index| *index = None);
+        self.bin_indices
+            .iter_mut()
+            .for_each(|index| *index = NodeIndexOption::NONE);
 
         self.nodes = vec![Node::default(); self.max_allocs as usize];
 
         // Freelist is a stack. Nodes in inverse order so that [0] pops first.
         self.free_nodes = (0..self.max_allocs)
-            .map(|i| {
-                NI::NonMax::try_from(NI::from_u32(self.max_allocs - i - 1)).unwrap_or_default()
-            })
+            .rev()
+            .map(|i| NI::from_u32(i))
             .collect();
 
         // Start state: Whole storage as one big node
@@ -241,19 +276,18 @@ where
             Some(leaf_bin_index) => leaf_bin_index,
             None => {
                 top_bin_index =
-                    find_lowest_bit_set_after(self.used_bins_top, min_top_bin_index + 1)?.into();
+                    find_lowest_bit_set_after(self.used_bins_top, min_top_bin_index + 1)?;
 
                 // All leaf bins here fit the alloc, since the top bin was
                 // rounded up. Start leaf search from bit 0.
                 //
                 // NOTE: This search can't fail since at least one leaf bit was
                 // set because the top bit was set.
-                NonMaxU32::try_from(self.used_bins[top_bin_index as usize].trailing_zeros())
-                    .unwrap()
+                self.used_bins[top_bin_index as usize].trailing_zeros()
             }
         };
 
-        let bin_index = (top_bin_index << TOP_BINS_INDEX_SHIFT) | u32::from(leaf_bin_index);
+        let bin_index = (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index;
 
         // Pop the top node of the bin. Bin top = node.next.
         let node_index = self.bin_indices[bin_index as usize].unwrap();
@@ -262,8 +296,8 @@ where
         node.data_size = size;
         node.used = true;
         self.bin_indices[bin_index as usize] = node.bin_list_next;
-        if let Some(bin_list_next) = node.bin_list_next {
-            self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
+        if let Some(bin_list_next) = node.bin_list_next.to_option() {
+            self.nodes[bin_list_next.to_usize()].bin_list_prev = NodeIndexOption::NONE;
         }
         self.free_storage -= node_total_size;
         debug!(
@@ -297,12 +331,13 @@ where
             // Link nodes next to each other so that we can merge them later if both are free
             // And update the old next neighbor to point to the new node (in middle)
             let node = &mut self.nodes[node_index.to_usize()];
-            if let Some(neighbor_next) = node.neighbor_next {
-                self.nodes[neighbor_next.to_usize()].neighbor_prev = Some(new_node_index);
+            if let Some(neighbor_next) = node.neighbor_next.to_option() {
+                self.nodes[neighbor_next.to_usize()].neighbor_prev =
+                    NodeIndexOption::some(new_node_index);
             }
-            self.nodes[new_node_index.to_usize()].neighbor_prev = Some(node_index);
+            self.nodes[new_node_index.to_usize()].neighbor_prev = NodeIndexOption::some(node_index);
             self.nodes[new_node_index.to_usize()].neighbor_next = neighbor_next;
-            self.nodes[node_index.to_usize()].neighbor_next = Some(new_node_index);
+            self.nodes[node_index.to_usize()].neighbor_next = NodeIndexOption::some(new_node_index);
         }
 
         let node = &mut self.nodes[node_index.to_usize()];
@@ -332,7 +367,7 @@ where
         // Double delete check
         assert!(used);
 
-        if let Some(neighbor_prev) = self.nodes[node_index.to_usize()].neighbor_prev {
+        if let Some(neighbor_prev) = self.nodes[node_index.to_usize()].neighbor_prev.to_option() {
             if !self.nodes[neighbor_prev.to_usize()].used {
                 // Previous (contiguous) free node: Change offset to previous
                 // node offset. Sum sizes
@@ -345,12 +380,12 @@ where
                 self.remove_node_from_bin(neighbor_prev);
 
                 let prev_node = &self.nodes[neighbor_prev.to_usize()];
-                debug_assert_eq!(prev_node.neighbor_next, Some(node_index));
+                debug_assert_eq!(prev_node.neighbor_next, NodeIndexOption::some(node_index));
                 self.nodes[node_index.to_usize()].neighbor_prev = prev_node.neighbor_prev;
             }
         }
 
-        if let Some(neighbor_next) = self.nodes[node_index.to_usize()].neighbor_next {
+        if let Some(neighbor_next) = self.nodes[node_index.to_usize()].neighbor_next.to_option() {
             if !self.nodes[neighbor_next.to_usize()].used {
                 // Next (contiguous) free node: Offset remains the same. Sum
                 // sizes.
@@ -362,7 +397,7 @@ where
                 self.remove_node_from_bin(neighbor_next);
 
                 let next_node = &self.nodes[neighbor_next.to_usize()];
-                debug_assert_eq!(next_node.neighbor_prev, Some(node_index));
+                debug_assert_eq!(next_node.neighbor_prev, NodeIndexOption::some(node_index));
                 self.nodes[node_index.to_usize()].neighbor_next = next_node.neighbor_next;
             }
         }
@@ -386,17 +421,21 @@ where
         let combined_node_index = self.insert_node_into_bin(size, offset);
 
         // Connect neighbors with the new combined node
-        if let Some(neighbor_next) = neighbor_next {
-            self.nodes[combined_node_index.to_usize()].neighbor_next = Some(neighbor_next);
-            self.nodes[neighbor_next.to_usize()].neighbor_prev = Some(combined_node_index);
+        if let Some(neighbor_next) = neighbor_next.to_option() {
+            self.nodes[combined_node_index.to_usize()].neighbor_next =
+                NodeIndexOption::some(neighbor_next);
+            self.nodes[neighbor_next.to_usize()].neighbor_prev =
+                NodeIndexOption::some(combined_node_index);
         }
-        if let Some(neighbor_prev) = neighbor_prev {
-            self.nodes[combined_node_index.to_usize()].neighbor_prev = Some(neighbor_prev);
-            self.nodes[neighbor_prev.to_usize()].neighbor_next = Some(combined_node_index);
+        if let Some(neighbor_prev) = neighbor_prev.to_option() {
+            self.nodes[combined_node_index.to_usize()].neighbor_prev =
+                NodeIndexOption::some(neighbor_prev);
+            self.nodes[neighbor_prev.to_usize()].neighbor_next =
+                NodeIndexOption::some(combined_node_index);
         }
     }
 
-    fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI::NonMax {
+    fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI {
         // Round down to bin index to ensure that bin >= alloc
         let bin_index = small_float::uint_to_float_round_down(size);
 
@@ -426,10 +465,10 @@ where
             bin_list_next: top_node_index,
             ..Node::default()
         };
-        if let Some(top_node_index) = top_node_index {
-            self.nodes[top_node_index.to_usize()].bin_list_prev = Some(node_index);
+        if let Some(top_node_index) = top_node_index.to_option() {
+            self.nodes[top_node_index.to_usize()].bin_list_prev = NodeIndexOption::some(node_index);
         }
-        self.bin_indices[bin_index as usize] = Some(node_index);
+        self.bin_indices[bin_index as usize] = NodeIndexOption::some(node_index);
 
         self.free_storage += size;
         debug!(
@@ -439,15 +478,15 @@ where
         node_index
     }
 
-    fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
+    fn remove_node_from_bin(&mut self, node_index: NI) {
         // Copy the node to work around borrow check.
         let node = self.nodes[node_index.to_usize()];
 
-        match node.bin_list_prev {
+        match node.bin_list_prev.to_option() {
             Some(bin_list_prev) => {
                 // Easy case: We have previous node. Just remove this node from the middle of the list.
                 self.nodes[bin_list_prev.to_usize()].bin_list_next = node.bin_list_next;
-                if let Some(bin_list_next) = node.bin_list_next {
+                if let Some(bin_list_next) = node.bin_list_next.to_option() {
                     self.nodes[bin_list_next.to_usize()].bin_list_prev = node.bin_list_prev;
                 }
             }
@@ -461,8 +500,8 @@ where
                 let leaf_bin_index = (bin_index & LEAF_BINS_INDEX_MASK) as usize;
 
                 self.bin_indices[bin_index as usize] = node.bin_list_next;
-                if let Some(bin_list_next) = node.bin_list_next {
-                    self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
+                if let Some(bin_list_next) = node.bin_list_next.to_option() {
+                    self.nodes[bin_list_next.to_usize()].bin_list_prev = NodeIndexOption::NONE;
                 }
 
                 // Bin empty?
@@ -539,7 +578,7 @@ where
         for i in 0..NUM_LEAF_BINS {
             let mut count = 0;
             let mut maybe_node_index = self.bin_indices[i];
-            while let Some(node_index) = maybe_node_index {
+            while let Some(node_index) = maybe_node_index.to_option() {
                 maybe_node_index = self.nodes[node_index.to_usize()].bin_list_next;
                 count += 1;
             }
@@ -570,10 +609,12 @@ where
 }
 
 impl NodeIndex for u32 {
-    type NonMax = NonMaxU32;
-    const MAX: u32 = u32::MAX;
+    const INVALID: u32 = u32::MAX;
+
+    const NUM_VALID: u32 = Self::INVALID;
 
     fn from_u32(val: u32) -> Self {
+        assert!(val < Self::NUM_VALID);
         val
     }
 
@@ -583,26 +624,16 @@ impl NodeIndex for u32 {
 }
 
 impl NodeIndex for u16 {
-    type NonMax = NonMaxU16;
-    const MAX: u32 = u16::MAX as u32;
+    const INVALID: u16 = u16::MAX;
+
+    const NUM_VALID: u32 = Self::INVALID as u32;
 
     fn from_u32(val: u32) -> Self {
+        assert!(val < Self::NUM_VALID);
         val as u16
     }
 
     fn to_usize(self) -> usize {
         self as usize
-    }
-}
-
-impl NodeIndexNonMax for NonMaxU32 {
-    fn to_usize(self) -> usize {
-        u32::from(self) as usize
-    }
-}
-
-impl NodeIndexNonMax for NonMaxU16 {
-    fn to_usize(self) -> usize {
-        u16::from(self) as usize
     }
 }
