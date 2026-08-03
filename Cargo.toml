@@ -13,3 +13,4 @@ keywords = ["memory-management"]
 
 [dependencies]
 log = "0.4"
+slab = "0.4.12"
