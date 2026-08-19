@@ -116,7 +116,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
         let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
 
         // Remove a leaf bin mask bit
-        self.occupied_bins[top_bin_index as usize] &= !(1 << u32::from(leaf_bin_index));
+        self.occupied_bins[top_bin_index as usize] &= !(1 << leaf_bin_index);
 
         // All leaf bins empty?
         if self.occupied_bins[top_bin_index as usize] == 0 {

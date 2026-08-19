@@ -202,7 +202,7 @@ mod tests {
 
         // Test that float->uint->float conversion is precise for all numbers
         // NOTE: Test values < 240. 240->4G = overflows 32 bit integer
-        for i in (0..240).map(|i| SmallFloat::reinterpret_u32(i)) {
+        for i in (0..240).map(SmallFloat::reinterpret_u32) {
             let v = i.to_u32();
             let round_up = SmallFloat::from_u32_round_up(v);
             let round_down = SmallFloat::from_u32_round_down(v);
