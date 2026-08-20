@@ -2,6 +2,8 @@
 
 use std::fmt::{Debug, Display};
 
+use nonmax::{NonMaxU16, NonMaxU32};
+
 /// The index used to identify nodes in the allocator. Determines the number of allocations
 /// that the allocator supports.
 ///
@@ -10,9 +12,6 @@ use std::fmt::{Debug, Display};
 /// causes the allocator to use less memory but limits the number of allocations
 /// within a single allocator to at most 65,535.
 pub trait NodeIndex: Display + Debug + Clone + Copy + PartialEq + Eq {
-    /// An invalid representation in its type, used as the `None` type of `NodeIndexOption`.
-    const INVALID: Self;
-
     /// The number of indexes, consecutive starting from 0, that are valid representations
     const NUM_VALID: u32;
 
@@ -23,76 +22,40 @@ pub trait NodeIndex: Display + Debug + Clone + Copy + PartialEq + Eq {
     fn to_usize(self) -> usize;
 }
 
-/// A type much like [`Option<NodeIndex>`] but made to use the maximum integer value as the `None`
-/// value instead of requiring a separate discriminant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeIndexOption<NI: NodeIndex>(NI);
-
-impl<NI: NodeIndex> NodeIndexOption<NI> {
-    /// Equivalent to [`Option::None`]
-    pub const NONE: Self = NodeIndexOption(NodeIndex::INVALID);
-
-    /// Initializes what is equivalent to an [`Option::Some`] for the given node index
-    pub fn some(inner: NI) -> Self {
-        Self(inner)
-    }
-
-    /// Converts to the [`Option`] type for easier processing
-    #[inline]
-    pub fn to_option(self) -> Option<NI> {
-        if self == Self::NONE {
-            None
-        } else {
-            Some(self.0)
-        }
-    }
-
-    /// Whether the option holds no value
-    #[inline]
-    pub fn is_none(self) -> bool {
-        self == Self::NONE
-    }
-
-    /// Returns the value contained within the option. Panics if there is no such option.
-    #[inline]
-    pub fn unwrap(self) -> NI {
-        assert!(self != Self::NONE);
-        self.0
-    }
-}
-
-impl<NI: NodeIndex> Default for NodeIndexOption<NI> {
-    fn default() -> Self {
-        Self::NONE
-    }
-}
-
-impl NodeIndex for u32 {
-    const INVALID: u32 = u32::MAX;
-
-    const NUM_VALID: u32 = Self::INVALID;
+impl NodeIndex for NonMaxU32 {
+    const NUM_VALID: u32 = u32::MAX;
 
     fn from_u32(val: u32) -> Self {
-        assert!(val < Self::NUM_VALID);
-        val
+        NonMaxU32::try_from(val).unwrap()
     }
 
     fn to_usize(self) -> usize {
-        self as usize
+        self.get() as usize
     }
 }
 
-impl NodeIndex for u16 {
-    const INVALID: u16 = u16::MAX;
-
-    const NUM_VALID: u32 = Self::INVALID as u32;
+impl NodeIndex for NonMaxU16 {
+    const NUM_VALID: u32 = u16::MAX as u32;
 
     fn from_u32(val: u32) -> Self {
-        assert!(val < Self::NUM_VALID);
-        val as u16
+        NonMaxU16::try_from(u16::try_from(val).unwrap()).unwrap()
     }
 
     fn to_usize(self) -> usize {
-        self as usize
+        self.get() as usize
     }
+}
+
+/// A convenience trait that allows allocators to be defined with `u16` and `u32` instead
+/// of `NonMaxU16` and NonMaxU32
+pub trait RawNodeIndex {
+    type NodeIndex: NodeIndex;
+}
+
+impl RawNodeIndex for u16 {
+    type NodeIndex = NonMaxU16;
+}
+
+impl RawNodeIndex for u32 {
+    type NodeIndex = NonMaxU32;
 }

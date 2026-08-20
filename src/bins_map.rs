@@ -1,7 +1,7 @@
 // offset-allocator/src/bins_map.rs
 
 use crate::{
-    node_index::{NodeIndex, NodeIndexOption},
+    node_index::NodeIndex,
     small_float::{SmallFloat, SmallFloatMap},
 };
 
@@ -16,7 +16,7 @@ pub struct BinsMap<NI: NodeIndex> {
     /// An array of 32 bit-vectors that show which bins are nonempty, used for faster lookup of nonempty bins
     occupied_bins: [u8; NUM_TOP_BINS],
     /// A map that points to the head node of each bin
-    bins: SmallFloatMap<NodeIndexOption<NI>>,
+    bins: SmallFloatMap<Option<NI>>,
 }
 
 impl<NI: NodeIndex> Default for BinsMap<NI> {
@@ -93,11 +93,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
     }
 
     /// Replace the [`NodeIndexOption`] pointed to by the specific bin index with a new [`NodeIndexOption`]
-    pub fn replace_bin_node(
-        &mut self,
-        bin_index: SmallFloat,
-        node: NodeIndexOption<NI>,
-    ) -> NodeIndexOption<NI> {
+    pub fn replace_bin_node(&mut self, bin_index: SmallFloat, node: Option<NI>) -> Option<NI> {
         let old_node = std::mem::replace(&mut self.bins[bin_index], node);
         if node.is_none() && !old_node.is_none() {
             // Newly empty
@@ -138,7 +134,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
 }
 
 impl<NI: NodeIndex> std::ops::Index<SmallFloat> for BinsMap<NI> {
-    type Output = NodeIndexOption<NI>;
+    type Output = Option<NI>;
 
     fn index(&self, index: SmallFloat) -> &Self::Output {
         &self.bins[index]
