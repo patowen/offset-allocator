@@ -53,21 +53,32 @@ pub trait NodeIndexNonMax: Clone + Copy + PartialEq + Default + Debug + Display 
 }
 
 /// An allocator that manages a single contiguous chunk of space and hands out
-/// portions of it as requested.
+/// portions of it as requested. Note that this allocator does not support specifying
+/// the alignment of each allocation.
 pub struct Allocator<NI = u32>
 where
     NI: NodeIndex,
 {
+    /// The total size of the buffer
     size: u32,
+    /// The maximum number of "nodes", or continuous blocks the allocator can handle. The actual supported number of allocations is less than this.
     max_allocs: u32,
+    /// The total amount of remaining available space in the buffer. Fragmentation and rounding means that an allocation of this size is not always possible,
+    /// but as long as this is non-zero, and `max_nodes` isn't exceeded, it's always possible to create an allocation of size 1.
     free_storage: u32,
 
+    /// A bit-vector showing which `used_bins` entries are nonzero, used for faster lookup of nonempty bins
     used_bins_top: u32,
+    /// An array of 32 bit-vectors that show which bins are nonempty, used for faster lookup of nonempty bins
     used_bins: [u8; NUM_TOP_BINS],
+    /// A map that points to the head node of each bin
     bin_indices: [Option<NI::NonMax>; NUM_LEAF_BINS],
 
+    /// Maintains the mapping from [`NodeIndex`] to [`Node`]
     nodes: Vec<Node<NI>>,
+    /// A stack of available node indexes that are currently not allocated to any nodes
     free_nodes: Vec<NI::NonMax>,
+    /// An index within `free_nodes` pointing to the top of the stack.
     free_offset: u32,
 }
 
@@ -113,16 +124,28 @@ struct Node<NI = u32>
 where
     NI: NodeIndex,
 {
+    /// The offset of the node in the buffer
     data_offset: u32,
+    /// The size of the node in the buffer
     data_size: u32,
+    /// Nodes representing free space are added to bins based on their size. Each bin can store an arbitrary number of nodes,
+    /// so we used a linked list. This stores the previous node in the bin. This field is meaningless when the node is used in an active allocation.
     bin_list_prev: Option<NI::NonMax>,
+    /// Nodes representing free space are added to bins based on their size. Each bin can store an arbitrary number of nodes,
+    /// so we used a linked list. This stores the next node in the bin. This field is meaningless when the node is used in an active allocation.
     bin_list_next: Option<NI::NonMax>,
+    /// The entire buffer is split up into several nodes, some marking an allocation and others marking free space.
+    /// Neighboring nodes in this buffer point to each other in a linked list. This field stores the index of the previous neighboring node.
     neighbor_prev: Option<NI::NonMax>,
+    /// The entire buffer is split up into several nodes, some marking an allocation and others marking free space.
+    /// Neighboring nodes in this buffer point to each other in a linked list. This field stores the index of the next neighboring node.
     neighbor_next: Option<NI::NonMax>,
-    used: bool, // TODO: Merge as bit flag
+    /// Whether the node is used in an active allocation
+    used: bool, // Note: One possible enhancement to reduce the size of `Node` is to merge this with another field as a bit flag.
 }
 
-// Utility functions
+/// Out of bits at position greater than or equal to `start_bit_index`, returns the position of the
+/// lowest-position bit that is set to 1. Return `None` if there is no such bit.
 fn find_lowest_bit_set_after(bit_mask: u32, start_bit_index: u32) -> Option<NonMaxU32> {
     let mask_before_start_index = (1 << start_bit_index) - 1;
     let mask_after_start_index = !mask_before_start_index;
@@ -145,9 +168,14 @@ where
     }
 
     /// Creates a new allocator, managing a contiguous block of memory of `size`
-    /// units, with the given number of maximum allocations.
+    /// units, with the given number of maximum nodes.
     ///
-    /// Note that the maximum number of allocations must be less than
+    /// Note that even if no memory is freed, the maximum number of allocations
+    /// allowed is 1 less than the maximum number of nodes, since a node is needed
+    /// to keep track of the remaining free space. If memory is freed, due to fragmentation,
+    /// it is not guaranteed that another allocation will become available.
+    ///
+    /// Note also that the maximum number of nodes must be less than
     /// [`NodeIndex::MAX`] minus one. If this restriction is violated, this
     /// constructor will panic.
     pub fn with_max_allocs(size: u32, max_allocs: u32) -> Self {
@@ -202,8 +230,7 @@ where
             return None;
         }
 
-        // Round up to bin index to ensure that alloc >= bin
-        // Gives us min bin index that fits the size
+        // Round up when finding the bin index to ensure that any node in that bin can hold the allocation
         let min_bin_index = small_float::uint_to_float_round_up(size);
 
         let min_top_bin_index = min_bin_index >> TOP_BINS_INDEX_SHIFT;
@@ -239,7 +266,7 @@ where
 
         let bin_index = (top_bin_index << TOP_BINS_INDEX_SHIFT) | u32::from(leaf_bin_index);
 
-        // Pop the top node of the bin. Bin top = node.next.
+        // Pop the top node of the bin from the linked list
         let node_index = self.bin_indices[bin_index as usize].unwrap();
         let node = &mut self.nodes[node_index.to_usize()];
         let node_total_size = node.data_size;
@@ -300,7 +327,7 @@ where
     ///
     /// If the allocation has already been freed, the behavior is unspecified.
     /// It may or may not panic. Note that, because this crate contains no
-    /// unsafe code, the memory safe of the allocator *itself* will be
+    /// unsafe code, the memory safety of the allocator *itself* will be
     /// uncompromised, even on double free.
     pub fn free(&mut self, allocation: Allocation<NI>) {
         let node_index = allocation.metadata;
@@ -380,8 +407,10 @@ where
         }
     }
 
+    /// Creates a new free [`Node`] and inserts it at the head of the appropriate bin. Note that the caller of this
+    /// function is responsible for linking the node in the "neighbor" linked list.
     fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI::NonMax {
-        // Round down to bin index to ensure that bin >= alloc
+        // Round down when finding the bin index to ensure that the node being put in that bin can hold any allocation associated with that bin
         let bin_index = small_float::uint_to_float_round_down(size);
 
         let top_bin_index = bin_index >> TOP_BINS_INDEX_SHIFT;
@@ -423,6 +452,8 @@ where
         node_index
     }
 
+    /// Deletes a [`Node`], removing it from the bin. Note that the caller of this
+    /// function is responsible for fixing up links in the "neighbor" linked list.
     fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
         // Copy the node to work around borrow check.
         let node = self.nodes[node_index.to_usize()];
@@ -438,7 +469,7 @@ where
             None => {
                 // Hard case: We are the first node in a bin. Find the bin.
 
-                // Round down to bin index to ensure that bin >= alloc
+                // Round down when finding the bin index to ensure consistency with `insert_node_into_bin`
                 let bin_index = small_float::uint_to_float_round_down(node.data_size);
 
                 let top_bin_index = (bin_index >> TOP_BINS_INDEX_SHIFT) as usize;
@@ -481,8 +512,7 @@ where
 
     /// Returns the *used* size of an allocation.
     ///
-    /// Note that this may be larger than the size requested at allocation time,
-    /// due to rounding.
+    /// For this allocator, this always equals the size requested at allocation time.
     pub fn allocation_size(&self, allocation: Allocation<NI>) -> u32 {
         self.nodes
             .get(allocation.metadata.to_usize())
@@ -516,8 +546,7 @@ where
         }
     }
 
-    /// Returns detailed information about the number of allocations in each
-    /// bin.
+    /// Returns detailed information about the number of allocations in each bin.
     pub fn storage_report_full(&self) -> StorageReportFull {
         let mut report = StorageReportFull::default();
         for i in 0..NUM_LEAF_BINS {
