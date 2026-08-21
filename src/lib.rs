@@ -9,7 +9,10 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use log::debug;
 use nonmax::NonMaxU32;
 
-use crate::node_index::{NodeIndex, NodeIndexNonMax};
+use crate::{
+    node_index::{NodeIndex, NodeIndexNonMax},
+    small_float::{SmallFloat, SmallFloatMap},
+};
 
 pub mod ext;
 
@@ -17,10 +20,8 @@ mod node_index;
 mod small_float;
 
 const NUM_TOP_BINS: usize = 32;
-const BINS_PER_LEAF: usize = 8;
 const TOP_BINS_INDEX_SHIFT: u32 = 3;
 const LEAF_BINS_INDEX_MASK: u32 = 7;
-const NUM_LEAF_BINS: usize = NUM_TOP_BINS * BINS_PER_LEAF;
 
 /// An allocator that manages a single contiguous chunk of space and hands out
 /// portions of it as requested. Note that this allocator does not support specifying
@@ -42,7 +43,7 @@ where
     /// An array of 32 bit-vectors that show which bins are nonempty, used for faster lookup of nonempty bins
     used_bins: [u8; NUM_TOP_BINS],
     /// A map that points to the head node of each bin
-    bin_indices: [Option<NI::NonMax>; NUM_LEAF_BINS],
+    bin_indices: SmallFloatMap<Option<NI::NonMax>>,
 
     /// Maintains the mapping from [`NodeIndex`] to [`Node`]
     nodes: Vec<Node<NI>>,
@@ -74,10 +75,10 @@ pub struct StorageReport {
 }
 
 /// Provides a detailed accounting of each bin within the allocator.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct StorageReportFull {
     /// Each bin within the allocator.
-    pub free_regions: [StorageReportFullRegion; NUM_LEAF_BINS],
+    pub free_regions: SmallFloatMap<StorageReportFullRegion>,
 }
 
 /// A detailed accounting of each allocator bin.
@@ -158,7 +159,7 @@ where
             used_bins_top: 0,
             free_offset: 0,
             used_bins: [0; NUM_TOP_BINS],
-            bin_indices: [None; NUM_LEAF_BINS],
+            bin_indices: SmallFloatMap::default(),
             nodes: vec![],
             free_nodes: vec![],
         };
@@ -174,7 +175,9 @@ where
 
         self.used_bins.iter_mut().for_each(|bin| *bin = 0);
 
-        self.bin_indices.iter_mut().for_each(|index| *index = None);
+        for i in SmallFloat::values() {
+            self.bin_indices[i] = None;
+        }
 
         self.nodes = vec![Node::default(); self.max_nodes as usize];
 
@@ -199,10 +202,10 @@ where
         }
 
         // Round up when finding the bin index to ensure that any node in that bin can hold the allocation
-        let min_bin_index = small_float::uint_to_float_round_up(size);
+        let min_bin_index = SmallFloat::from_u32_round_up(size);
 
-        let min_top_bin_index = min_bin_index >> TOP_BINS_INDEX_SHIFT;
-        let min_leaf_bin_index = min_bin_index & LEAF_BINS_INDEX_MASK;
+        let min_top_bin_index = min_bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
+        let min_leaf_bin_index = min_bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
 
         let mut top_bin_index = min_top_bin_index;
         let mut leaf_bin_index = None;
@@ -232,15 +235,17 @@ where
             }
         };
 
-        let bin_index = (top_bin_index << TOP_BINS_INDEX_SHIFT) | u32::from(leaf_bin_index);
+        let bin_index = SmallFloat::reinterpret_u32(
+            (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index.get(),
+        );
 
         // Pop the top node of the bin from the linked list
-        let node_index = self.bin_indices[bin_index as usize].unwrap();
+        let node_index = self.bin_indices[bin_index].unwrap();
         let node = &mut self.nodes[node_index.to_usize()];
         let node_total_size = node.data_size;
         node.data_size = size;
         node.used = true;
-        self.bin_indices[bin_index as usize] = node.bin_list_next;
+        self.bin_indices[bin_index] = node.bin_list_next;
         if let Some(bin_list_next) = node.bin_list_next {
             self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
         }
@@ -251,7 +256,7 @@ where
         );
 
         // Bin empty?
-        if self.bin_indices[bin_index as usize].is_none() {
+        if self.bin_indices[bin_index].is_none() {
             // Remove a leaf bin mask bit
             self.used_bins[top_bin_index as usize] &= !(1 << u32::from(leaf_bin_index));
 
@@ -379,20 +384,20 @@ where
     /// function is responsible for linking the node in the "neighbor" linked list.
     fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI::NonMax {
         // Round down when finding the bin index to ensure that the node being put in that bin can hold any allocation associated with that bin
-        let bin_index = small_float::uint_to_float_round_down(size);
+        let bin_index = SmallFloat::from_u32_round_down(size);
 
-        let top_bin_index = bin_index >> TOP_BINS_INDEX_SHIFT;
-        let leaf_bin_index = bin_index & LEAF_BINS_INDEX_MASK;
+        let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
+        let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
 
         // Bin was empty before?
-        if self.bin_indices[bin_index as usize].is_none() {
+        if self.bin_indices[bin_index].is_none() {
             // Set bin mask bits
             self.used_bins[top_bin_index as usize] |= 1 << leaf_bin_index;
             self.used_bins_top |= 1 << top_bin_index;
         }
 
         // Take a freelist node and insert on top of the bin linked list (next = old top)
-        let top_node_index = self.bin_indices[bin_index as usize];
+        let top_node_index = self.bin_indices[bin_index];
         let free_offset = self.free_offset;
         let node_index = self.free_nodes[free_offset as usize];
         self.free_offset -= 1;
@@ -410,7 +415,7 @@ where
         if let Some(top_node_index) = top_node_index {
             self.nodes[top_node_index.to_usize()].bin_list_prev = Some(node_index);
         }
-        self.bin_indices[bin_index as usize] = Some(node_index);
+        self.bin_indices[bin_index] = Some(node_index);
 
         self.free_storage += size;
         debug!(
@@ -438,18 +443,20 @@ where
                 // Hard case: We are the first node in a bin. Find the bin.
 
                 // Round down when finding the bin index to ensure consistency with `insert_node_into_bin`
-                let bin_index = small_float::uint_to_float_round_down(node.data_size);
+                let bin_index = SmallFloat::from_u32_round_down(node.data_size);
 
-                let top_bin_index = (bin_index >> TOP_BINS_INDEX_SHIFT) as usize;
-                let leaf_bin_index = (bin_index & LEAF_BINS_INDEX_MASK) as usize;
+                let top_bin_index =
+                    (bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT) as usize;
+                let leaf_bin_index =
+                    (bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK) as usize;
 
-                self.bin_indices[bin_index as usize] = node.bin_list_next;
+                self.bin_indices[bin_index] = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next {
                     self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
                 }
 
                 // Bin empty?
-                if self.bin_indices[bin_index as usize].is_none() {
+                if self.bin_indices[bin_index].is_none() {
                     // Remove a leaf bin mask bit
                     self.used_bins[top_bin_index as usize] &= !(1 << leaf_bin_index);
 
@@ -500,9 +507,10 @@ where
             if self.used_bins_top > 0 {
                 let top_bin_index = self.used_bins_top.ilog2();
                 let leaf_bin_index = (self.used_bins[top_bin_index as usize] as u32).ilog2();
-                largest_free_region = small_float::float_to_uint(
+                largest_free_region = SmallFloat::reinterpret_u32(
                     (top_bin_index << TOP_BINS_INDEX_SHIFT) | leaf_bin_index,
-                );
+                )
+                .to_u32();
                 debug_assert!(free_storage >= largest_free_region);
             }
         }
@@ -516,7 +524,7 @@ where
     /// Returns detailed information about the number of allocations in each bin.
     pub fn storage_report_full(&self) -> StorageReportFull {
         let mut report = StorageReportFull::default();
-        for i in 0..NUM_LEAF_BINS {
+        for i in SmallFloat::values() {
             let mut count = 0;
             let mut maybe_node_index = self.bin_indices[i];
             while let Some(node_index) = maybe_node_index {
@@ -524,19 +532,11 @@ where
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
-                size: small_float::float_to_uint(i as u32),
+                size: i.to_u32(),
                 count,
             }
         }
         report
-    }
-}
-
-impl Default for StorageReportFull {
-    fn default() -> Self {
-        Self {
-            free_regions: [Default::default(); NUM_LEAF_BINS],
-        }
     }
 }
 
