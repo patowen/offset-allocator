@@ -92,7 +92,9 @@ impl<NI: NodeIndex> BinsMap<NI> {
         ))
     }
 
-    /// Replace the [`NodeIndexOption`] pointed to by the specific bin index with a new [`NodeIndexOption`]
+    /// Replace the [`NodeIndexNonMax`] pointed to by the specific bin index with a new [`NodeIndexNonMax`]
+    ///
+    /// [`NodeIndexNonMax`]: crate::node_index::NodeIndexNonMax
     pub fn replace_bin_node(
         &mut self,
         bin_index: SmallFloat,
