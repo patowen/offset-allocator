@@ -15,14 +15,14 @@ use slab::Slab;
 
 use crate::{
     bins_map::BinsMap,
-    node_index::{NodeIndex, RawNodeIndex},
+    node_index::{NodeIndex, NodeIndexNonMax},
     small_float::{SmallFloat, SmallFloatMap},
 };
 
 /// An allocator that manages a single contiguous chunk of space and hands out
 /// portions of it as requested. Note that this allocator does not support specifying
 /// the alignment of each allocation.
-pub struct Allocator<RNI: RawNodeIndex = u32> {
+pub struct Allocator<NI: NodeIndex = u32> {
     /// The total size of the buffer
     size: u32,
     /// The maximum number of "nodes", or continuous blocks the allocator can handle. The actual supported number of allocations is less than this.
@@ -31,18 +31,18 @@ pub struct Allocator<RNI: RawNodeIndex = u32> {
     /// but as long as this is non-zero, and `max_nodes` isn't exceeded, it's always possible to create an allocation of size 1.
     free_storage: u32,
     /// A [`BinsMap`] that keeps track of all nodes that are not part of an existing allocation
-    bins_map: BinsMap<RNI::NodeIndex>,
+    bins_map: BinsMap<NI>,
     /// Maintains the mapping from [`NodeIndex`] to [`Node`]
-    nodes: NodeSlab<RNI::NodeIndex>,
+    nodes: NodeSlab<NI>,
 }
 
 /// A single allocation.
 #[derive(Clone, Copy)]
-pub struct Allocation<RNI: RawNodeIndex> {
+pub struct Allocation<NI: NodeIndex> {
     /// The location of this allocation within the buffer.
     pub offset: u32,
     /// The node index associated with this allocation.
-    metadata: RNI::NodeIndex,
+    metadata: NI::NonMax,
 }
 
 /// Provides a summary of the state of the allocator, including space remaining.
@@ -78,16 +78,16 @@ struct Node<NI: NodeIndex> {
     data_size: u32,
     /// Nodes representing free space are added to bins based on their size. Each bin can store an arbitrary number of nodes,
     /// so we used a linked list. This stores the previous node in the bin. This field is meaningless when the node is used in an active allocation.
-    bin_list_prev: Option<NI>,
+    bin_list_prev: Option<NI::NonMax>,
     /// Nodes representing free space are added to bins based on their size. Each bin can store an arbitrary number of nodes,
     /// so we used a linked list. This stores the next node in the bin. This field is meaningless when the node is used in an active allocation.
-    bin_list_next: Option<NI>,
+    bin_list_next: Option<NI::NonMax>,
     /// The entire buffer is split up into several nodes, some marking an allocation and others marking free space.
     /// Neighboring nodes in this buffer point to each other in a linked list. This field stores the index of the previous neighboring node.
-    neighbor_prev: Option<NI>,
+    neighbor_prev: Option<NI::NonMax>,
     /// The entire buffer is split up into several nodes, some marking an allocation and others marking free space.
     /// Neighboring nodes in this buffer point to each other in a linked list. This field stores the index of the next neighboring node.
-    neighbor_next: Option<NI>,
+    neighbor_next: Option<NI::NonMax>,
     /// Whether the node is used in an active allocation
     used: bool, // Note: One possible enhancement to reduce the size of `Node` is to merge this with another field as a bit flag.
 }
@@ -111,39 +111,39 @@ impl<NI: NodeIndex> NodeSlab<NI> {
 
     /// Insert a node into the slab, returning the index associated with it
     #[inline]
-    pub fn insert(&mut self, node: Node<NI>) -> NI {
+    pub fn insert(&mut self, node: Node<NI>) -> NI::NonMax {
         assert!(self.len() != u32::MAX);
-        NI::from_u32(self.0.insert(node) as u32)
+        NI::NonMax::from_u32(self.0.insert(node) as u32)
     }
 
     /// Remove and return the node associated with the index
     #[inline]
-    pub fn remove(&mut self, index: NI) -> Node<NI> {
+    pub fn remove(&mut self, index: NI::NonMax) -> Node<NI> {
         self.0.remove(index.to_usize())
     }
 }
 
-impl<NI: NodeIndex> std::ops::Index<NI> for NodeSlab<NI> {
+impl<NI: NodeIndex> std::ops::Index<NI::NonMax> for NodeSlab<NI> {
     type Output = Node<NI>;
 
     #[inline]
-    fn index(&self, index: NI) -> &Self::Output {
+    fn index(&self, index: NI::NonMax) -> &Self::Output {
         &self.0[index.to_usize()]
     }
 }
 
-impl<NI: NodeIndex> std::ops::IndexMut<NI> for NodeSlab<NI> {
+impl<NI: NodeIndex> std::ops::IndexMut<NI::NonMax> for NodeSlab<NI> {
     #[inline]
-    fn index_mut(&mut self, index: NI) -> &mut Self::Output {
+    fn index_mut(&mut self, index: NI::NonMax) -> &mut Self::Output {
         &mut self.0[index.to_usize()]
     }
 }
 
-impl<RNI: RawNodeIndex> Allocator<RNI> {
+impl<NI: NodeIndex> Allocator<NI> {
     /// Creates a new allocator, managing a contiguous block of memory of `size`
     /// units, with the maximum allocations set as high as possible.
     pub fn new(size: u32) -> Self {
-        Allocator::with_max_nodes(size, RNI::NodeIndex::NUM_VALID)
+        Allocator::with_max_nodes(size, NI::MAX)
     }
 
     /// Creates a new allocator, managing a contiguous block of memory of `size`
@@ -155,11 +155,11 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     /// it is not guaranteed that another allocation will become available.
     ///
     /// Note also that the maximum number of nodes must be at most
-    /// [`NodeIndex::NUM_VALID`] and at least 1. If this restriction is violated, this
+    /// [`NodeIndex::MAX`] and at least 1. If this restriction is violated, this
     /// constructor will panic.
     pub fn with_max_nodes(size: u32, max_nodes: u32) -> Self {
         assert!(max_nodes > 0);
-        assert!(max_nodes <= RNI::NodeIndex::NUM_VALID);
+        assert!(max_nodes <= NI::MAX);
 
         let mut this = Self {
             size,
@@ -181,7 +181,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     ///
     /// If there's not enough contiguous space for this allocation, returns
     /// None.
-    pub fn allocate(&mut self, size: u32) -> Option<Allocation<RNI>> {
+    pub fn allocate(&mut self, size: u32) -> Option<Allocation<NI>> {
         // Out of allocations?
         if self.nodes.len() >= self.max_nodes {
             return None;
@@ -242,7 +242,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     /// If the allocation has already been freed, the behavior is unspecified.
     /// It may or may not panic. Note that the memory safety of the allocator *itself* will be
     /// uncompromised, even on double free.
-    pub fn free(&mut self, allocation: Allocation<RNI>) {
+    pub fn free(&mut self, allocation: Allocation<NI>) {
         let node_index = allocation.metadata;
 
         // Merge with neighbors…
@@ -309,7 +309,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
 
     /// Creates a new free [`Node`] and inserts it at the head of the appropriate bin. Note that the caller of this
     /// function is responsible for linking node in the "neighbor" linked list.
-    fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> RNI::NodeIndex {
+    fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI::NonMax {
         // Round down when finding the bin index to ensure that the node being put in that bin can hold any allocation associated with that bin
         let bin_index = SmallFloat::from_u32_round_down(size);
 
@@ -340,7 +340,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     /// Deletes a [`Node`], removing it from the bin. Note that the caller of this
     /// function is responsible for fixing up links in the "neighbor" linked list, and it is recommended
     /// that this fixup occur before this function is called.
-    fn remove_node_from_bin(&mut self, node_index: RNI::NodeIndex) {
+    fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
         // Copy the node to work around borrow check.
         let node = self.nodes[node_index];
 
@@ -378,7 +378,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     /// Returns the *used* size of an allocation.
     ///
     /// For this allocator, this always equals the size requested at allocation time.
-    pub fn allocation_size(&self, allocation: Allocation<RNI>) -> u32 {
+    pub fn allocation_size(&self, allocation: Allocation<NI>) -> u32 {
         self.nodes[allocation.metadata].data_size
     }
 
@@ -421,7 +421,7 @@ impl<RNI: RawNodeIndex> Allocator<RNI> {
     }
 }
 
-impl<RNI: RawNodeIndex> Debug for Allocator<RNI> {
+impl<NI: NodeIndex> Debug for Allocator<NI> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.storage_report().fmt(f)
     }
