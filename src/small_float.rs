@@ -27,9 +27,7 @@ pub fn uint_to_float_round_up(size: u32) -> u32 {
         mantissa = size
     } else {
         // Normalized: Hidden high bit always 1. Not stored. Just like float.
-        let leading_zeros = size.leading_zeros();
-        let highest_set_bit = 31 - leading_zeros;
-
+        let highest_set_bit = size.ilog2();
         let mantissa_start_bit = highest_set_bit - MANTISSA_BITS;
         exp = mantissa_start_bit + 1;
         mantissa = (size >> mantissa_start_bit) & MANTISSA_MASK;
@@ -56,9 +54,7 @@ pub fn uint_to_float_round_down(size: u32) -> u32 {
         mantissa = size
     } else {
         // Normalized: Hidden high bit always 1. Not stored. Just like float.
-        let leading_zeros = size.leading_zeros();
-        let highest_set_bit = 31 - leading_zeros;
-
+        let highest_set_bit = size.ilog2();
         let mantissa_start_bit = highest_set_bit - MANTISSA_BITS;
         exp = mantissa_start_bit + 1;
         mantissa = (size >> mantissa_start_bit) & MANTISSA_MASK;
