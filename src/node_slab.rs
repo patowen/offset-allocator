@@ -10,8 +10,8 @@ pub(crate) struct NodeSlab<NI: NodeIndex> {
     nodes: Vec<Node<NI>>,
     /// A stack of available node indexes that are currently not allocated to any nodes
     free_nodes: Vec<NI::NonMax>,
-    /// An index within `free_nodes` pointing to the top of the stack.
-    free_offset: u32,
+    /// How many elements within `free_nodes` are part of the stack.
+    num_free_nodes: u32,
 }
 
 impl<NI: NodeIndex> NodeSlab<NI> {
@@ -24,27 +24,25 @@ impl<NI: NodeIndex> NodeSlab<NI> {
             free_nodes: (0..max_nodes)
                 .map(|i| NI::NonMax::try_from(NI::from_u32(max_nodes - i - 1)).unwrap_or_default())
                 .collect(),
-            free_offset: max_nodes - 1,
+            num_free_nodes: max_nodes,
         }
     }
 
     /// Return whether there is no more room for more nodes
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.free_offset == 0
+        self.num_free_nodes == 0
     }
 
     /// Insert a node into the slab, returning the index associated with it
     #[inline]
     pub fn insert(&mut self, node: Node<NI>) -> NI::NonMax {
         assert!(!self.is_full());
-        let free_offset = self.free_offset;
-        let node_index = self.free_nodes[free_offset as usize];
-        self.free_offset -= 1;
+        self.num_free_nodes -= 1;
+        let node_index = self.free_nodes[self.num_free_nodes as usize];
         debug!(
             "Getting node {} from freelist[{}]",
-            node_index,
-            self.free_offset + 1
+            node_index, self.num_free_nodes
         );
         self.nodes[node_index.to_usize()] = node;
         node_index
@@ -56,11 +54,10 @@ impl<NI: NodeIndex> NodeSlab<NI> {
         // Insert the removed node to freelist
         debug!(
             "Putting node {} into freelist[{}] (free)",
-            index,
-            self.free_offset + 1
+            index, self.num_free_nodes
         );
-        self.free_offset += 1;
-        self.free_nodes[self.free_offset as usize] = index;
+        self.free_nodes[self.num_free_nodes as usize] = index;
+        self.num_free_nodes += 1;
     }
 }
 
