@@ -10,7 +10,8 @@ use log::debug;
 
 use crate::{
     bins_map::BinsMap,
-    node_index::{NodeIndex, NodeIndexNonMax},
+    node_index::NodeIndex,
+    node_slab::NodeSlab,
     small_float::{SmallFloat, SmallFloatMap},
 };
 
@@ -18,6 +19,7 @@ pub mod ext;
 
 mod bins_map;
 mod node_index;
+mod node_slab;
 mod small_float;
 
 /// An allocator that manages a single contiguous chunk of space and hands out
@@ -37,11 +39,7 @@ where
     /// A [`BinsMap`] that keeps track of all nodes that are not part of an existing allocation
     bins_map: BinsMap<NI>,
     /// Maintains the mapping from [`NodeIndex`] to [`Node`]
-    nodes: Vec<Node<NI>>,
-    /// A stack of available node indexes that are currently not allocated to any nodes
-    free_nodes: Vec<NI::NonMax>,
-    /// An index within `free_nodes` pointing to the top of the stack.
-    free_offset: u32,
+    nodes: NodeSlab<NI>,
 }
 
 /// A single allocation.
@@ -135,9 +133,7 @@ where
             max_nodes,
             free_storage: 0,
             bins_map: BinsMap::default(),
-            free_offset: 0,
-            nodes: vec![],
-            free_nodes: vec![],
+            nodes: NodeSlab::new(max_nodes),
         };
         this.reset();
         this
@@ -146,16 +142,8 @@ where
     /// Clears out all allocations.
     pub fn reset(&mut self) {
         self.free_storage = 0;
-        self.free_offset = self.max_nodes - 1;
-
         self.bins_map = BinsMap::default();
-
-        self.nodes = vec![Node::default(); self.max_nodes as usize];
-
-        // Freelist is a stack. Nodes in inverse order so that [0] pops first.
-        self.free_nodes = (0..self.max_nodes)
-            .map(|i| NI::NonMax::try_from(NI::from_u32(self.max_nodes - i - 1)).unwrap_or_default())
-            .collect();
+        self.nodes = NodeSlab::new(self.max_nodes);
 
         // Start state: Whole storage as one big node
         // Algorithm will split remainders and push them back as smaller nodes
@@ -168,7 +156,7 @@ where
     /// None.
     pub fn allocate(&mut self, size: u32) -> Option<Allocation<NI>> {
         // Out of allocations?
-        if self.free_offset == 0 {
+        if self.nodes.is_full() {
             return None;
         }
 
@@ -178,14 +166,14 @@ where
 
         // Pop the top node of the bin from the linked list
         let node_index = self.bins_map[bin_index].unwrap();
-        let node = &mut self.nodes[node_index.to_usize()];
+        let node = &mut self.nodes[node_index];
         let node_total_size = node.data_size;
         node.data_size = size;
         node.used = true;
         self.bins_map
             .replace_bin_node(bin_index, node.bin_list_next);
         if let Some(bin_list_next) = node.bin_list_next {
-            self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
+            self.nodes[bin_list_next].bin_list_prev = None;
         }
         self.free_storage -= node_total_size;
         debug!(
@@ -200,22 +188,22 @@ where
                 data_offset,
                 neighbor_next,
                 ..
-            } = self.nodes[node_index.to_usize()];
+            } = self.nodes[node_index];
 
             let new_node_index = self.insert_node_into_bin(remainder_size, data_offset + size);
 
             // Link nodes next to each other so that we can merge them later if both are free
             // And update the old next neighbor to point to the new node (in middle)
-            let node = &mut self.nodes[node_index.to_usize()];
+            let node = &mut self.nodes[node_index];
             if let Some(neighbor_next) = node.neighbor_next {
-                self.nodes[neighbor_next.to_usize()].neighbor_prev = Some(new_node_index);
+                self.nodes[neighbor_next].neighbor_prev = Some(new_node_index);
             }
-            self.nodes[new_node_index.to_usize()].neighbor_prev = Some(node_index);
-            self.nodes[new_node_index.to_usize()].neighbor_next = neighbor_next;
-            self.nodes[node_index.to_usize()].neighbor_next = Some(new_node_index);
+            self.nodes[new_node_index].neighbor_prev = Some(node_index);
+            self.nodes[new_node_index].neighbor_next = neighbor_next;
+            self.nodes[node_index].neighbor_next = Some(new_node_index);
         }
 
-        let node = &mut self.nodes[node_index.to_usize()];
+        let node = &mut self.nodes[node_index];
         Some(Allocation {
             offset: NI::from_u32(node.data_offset),
             metadata: node_index,
@@ -237,36 +225,36 @@ where
             data_size: mut size,
             used,
             ..
-        } = self.nodes[node_index.to_usize()];
+        } = self.nodes[node_index];
 
         // Double delete check
         assert!(used);
 
-        if let Some(neighbor_prev) = self.nodes[node_index.to_usize()].neighbor_prev {
-            if !self.nodes[neighbor_prev.to_usize()].used {
+        if let Some(neighbor_prev) = self.nodes[node_index].neighbor_prev {
+            if !self.nodes[neighbor_prev].used {
                 // Previous (contiguous) free node: Change offset to previous
                 // node offset. Sum sizes
-                let prev_node = &self.nodes[neighbor_prev.to_usize()];
+                let prev_node = &self.nodes[neighbor_prev];
                 offset = prev_node.data_offset;
                 size += prev_node.data_size;
 
-                let prev_node = &self.nodes[neighbor_prev.to_usize()];
+                let prev_node = &self.nodes[neighbor_prev];
                 debug_assert_eq!(prev_node.neighbor_next, Some(node_index));
-                self.nodes[node_index.to_usize()].neighbor_prev = prev_node.neighbor_prev;
+                self.nodes[node_index].neighbor_prev = prev_node.neighbor_prev;
                 self.remove_node_from_bin(neighbor_prev);
             }
         }
 
-        if let Some(neighbor_next) = self.nodes[node_index.to_usize()].neighbor_next {
-            if !self.nodes[neighbor_next.to_usize()].used {
+        if let Some(neighbor_next) = self.nodes[node_index].neighbor_next {
+            if !self.nodes[neighbor_next].used {
                 // Next (contiguous) free node: Offset remains the same. Sum
                 // sizes.
-                let next_node = &self.nodes[neighbor_next.to_usize()];
+                let next_node = &self.nodes[neighbor_next];
                 size += next_node.data_size;
 
-                let next_node = &self.nodes[neighbor_next.to_usize()];
+                let next_node = &self.nodes[neighbor_next];
                 debug_assert_eq!(next_node.neighbor_prev, Some(node_index));
-                self.nodes[node_index.to_usize()].neighbor_next = next_node.neighbor_next;
+                self.nodes[node_index].neighbor_next = next_node.neighbor_next;
                 self.remove_node_from_bin(neighbor_next);
             }
         }
@@ -275,28 +263,21 @@ where
             neighbor_next,
             neighbor_prev,
             ..
-        } = self.nodes[node_index.to_usize()];
+        } = self.nodes[node_index];
 
-        // Insert the removed node to freelist
-        debug!(
-            "Putting node {} into freelist[{}] (free)",
-            node_index,
-            self.free_offset + 1
-        );
-        self.free_offset += 1;
-        self.free_nodes[self.free_offset as usize] = node_index;
+        self.nodes.remove(node_index);
 
         // Insert the (combined) free node to bin
         let combined_node_index = self.insert_node_into_bin(size, offset);
 
         // Connect neighbors with the new combined node
         if let Some(neighbor_next) = neighbor_next {
-            self.nodes[combined_node_index.to_usize()].neighbor_next = Some(neighbor_next);
-            self.nodes[neighbor_next.to_usize()].neighbor_prev = Some(combined_node_index);
+            self.nodes[combined_node_index].neighbor_next = Some(neighbor_next);
+            self.nodes[neighbor_next].neighbor_prev = Some(combined_node_index);
         }
         if let Some(neighbor_prev) = neighbor_prev {
-            self.nodes[combined_node_index.to_usize()].neighbor_prev = Some(neighbor_prev);
-            self.nodes[neighbor_prev.to_usize()].neighbor_next = Some(combined_node_index);
+            self.nodes[combined_node_index].neighbor_prev = Some(neighbor_prev);
+            self.nodes[neighbor_prev].neighbor_next = Some(combined_node_index);
         }
     }
 
@@ -308,22 +289,14 @@ where
 
         // Take a freelist node and insert on top of the bin linked list (next = old top)
         let top_node_index = self.bins_map[bin_index];
-        let free_offset = self.free_offset;
-        let node_index = self.free_nodes[free_offset as usize];
-        self.free_offset -= 1;
-        debug!(
-            "Getting node {} from freelist[{}]",
-            node_index,
-            self.free_offset + 1
-        );
-        self.nodes[node_index.to_usize()] = Node {
+        let node_index = self.nodes.insert(Node {
             data_offset,
             data_size: size,
             bin_list_next: top_node_index,
             ..Node::default()
-        };
+        });
         if let Some(top_node_index) = top_node_index {
-            self.nodes[top_node_index.to_usize()].bin_list_prev = Some(node_index);
+            self.nodes[top_node_index].bin_list_prev = Some(node_index);
         }
         self.bins_map.replace_bin_node(bin_index, Some(node_index));
 
@@ -342,14 +315,14 @@ where
     /// to fix up links in the "neighbor" linked list *before* this function is called.
     fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
         // Copy the node to work around borrow check.
-        let node = self.nodes[node_index.to_usize()];
+        let node = self.nodes[node_index];
 
         match node.bin_list_prev {
             Some(bin_list_prev) => {
                 // Easy case: We have previous node. Just remove this node from the middle of the list.
-                self.nodes[bin_list_prev.to_usize()].bin_list_next = node.bin_list_next;
+                self.nodes[bin_list_prev].bin_list_next = node.bin_list_next;
                 if let Some(bin_list_next) = node.bin_list_next {
-                    self.nodes[bin_list_next.to_usize()].bin_list_prev = node.bin_list_prev;
+                    self.nodes[bin_list_next].bin_list_prev = node.bin_list_prev;
                 }
             }
             None => {
@@ -361,19 +334,12 @@ where
                 self.bins_map
                     .replace_bin_node(bin_index, node.bin_list_next);
                 if let Some(bin_list_next) = node.bin_list_next {
-                    self.nodes[bin_list_next.to_usize()].bin_list_prev = None;
+                    self.nodes[bin_list_next].bin_list_prev = None;
                 }
             }
         }
 
-        // Insert the node to freelist
-        debug!(
-            "Putting node {} into freelist[{}] (remove_node_from_bin)",
-            node_index,
-            self.free_offset + 1
-        );
-        self.free_offset += 1;
-        self.free_nodes[self.free_offset as usize] = node_index;
+        self.nodes.remove(node_index);
 
         self.free_storage -= node.data_size;
         debug!(
@@ -386,10 +352,7 @@ where
     ///
     /// For this allocator, this always equals the size requested at allocation time.
     pub fn allocation_size(&self, allocation: Allocation<NI>) -> u32 {
-        self.nodes
-            .get(allocation.metadata.to_usize())
-            .map(|node| node.data_size)
-            .unwrap_or_default()
+        self.nodes[allocation.metadata].data_size
     }
 
     /// Returns a structure containing the amount of free space remaining, as
@@ -399,7 +362,7 @@ where
         let mut free_storage = 0;
 
         // Out of allocations? -> Zero free space
-        if self.free_offset > 0 {
+        if !self.nodes.is_full() {
             free_storage = self.free_storage;
             largest_free_region = self.bins_map.max_occupied().map_or(0, |x| x.to_u32());
             debug_assert!(free_storage >= largest_free_region);
@@ -418,7 +381,7 @@ where
             let mut count = 0;
             let mut maybe_node_index = self.bins_map[i];
             while let Some(node_index) = maybe_node_index {
-                maybe_node_index = self.nodes[node_index.to_usize()].bin_list_next;
+                maybe_node_index = self.nodes[node_index].bin_list_next;
                 count += 1;
             }
             report.free_regions[i] = StorageReportFullRegion {
