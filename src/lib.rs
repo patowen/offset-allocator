@@ -111,7 +111,7 @@ where
     /// Creates a new allocator, managing a contiguous block of memory of `size`
     /// units, with a default reasonable number of maximum nodes.
     pub fn new(size: u32) -> Self {
-        Allocator::with_max_nodes(size, u32::min(128 * 1024, NI::MAX - 1))
+        Allocator::with_max_nodes(size, u32::min(128 * 1024, NI::MAX))
     }
 
     /// Creates a new allocator, managing a contiguous block of memory of `size`
@@ -122,11 +122,12 @@ where
     /// to keep track of the remaining free space. If memory is freed, due to fragmentation,
     /// it is not guaranteed that another allocation will become available.
     ///
-    /// Note also that the maximum number of nodes must be less than
-    /// [`NodeIndex::MAX`] minus one. If this restriction is violated, this
+    /// Note also that the maximum number of nodes must be at most
+    /// [`NodeIndex::MAX`] and at least 1. If this restriction is violated, this
     /// constructor will panic.
     pub fn with_max_nodes(size: u32, max_nodes: u32) -> Self {
-        assert!(max_nodes < NI::MAX - 1);
+        assert!(max_nodes > 0);
+        assert!(max_nodes <= NI::MAX);
 
         let mut this = Self {
             size,
