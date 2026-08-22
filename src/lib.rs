@@ -293,8 +293,11 @@ where
         let node_index = self.nodes.insert(Node {
             data_offset,
             data_size: size,
+            bin_list_prev: None,
             bin_list_next: top_node_index,
-            ..Node::default()
+            neighbor_prev: None,
+            neighbor_next: None,
+            used: false,
         });
         if let Some(top_node_index) = top_node_index {
             self.nodes[top_node_index].bin_list_prev = Some(node_index);
