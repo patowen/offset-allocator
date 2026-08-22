@@ -62,7 +62,7 @@ where
     /// The total size of the buffer
     size: u32,
     /// The maximum number of "nodes", or continuous blocks the allocator can handle. The actual supported number of allocations is less than this.
-    max_allocs: u32,
+    max_nodes: u32,
     /// The total amount of remaining available space in the buffer. Fragmentation and rounding means that an allocation of this size is not always possible,
     /// but as long as this is non-zero, and `max_nodes` isn't exceeded, it's always possible to create an allocation of size 1.
     free_storage: u32,
@@ -162,9 +162,9 @@ where
     NI: NodeIndex,
 {
     /// Creates a new allocator, managing a contiguous block of memory of `size`
-    /// units, with a default reasonable number of maximum allocations.
+    /// units, with a default reasonable number of maximum nodes.
     pub fn new(size: u32) -> Self {
-        Allocator::with_max_allocs(size, u32::min(128 * 1024, NI::MAX - 1))
+        Allocator::with_max_nodes(size, u32::min(128 * 1024, NI::MAX - 1))
     }
 
     /// Creates a new allocator, managing a contiguous block of memory of `size`
@@ -178,12 +178,12 @@ where
     /// Note also that the maximum number of nodes must be less than
     /// [`NodeIndex::MAX`] minus one. If this restriction is violated, this
     /// constructor will panic.
-    pub fn with_max_allocs(size: u32, max_allocs: u32) -> Self {
-        assert!(max_allocs < NI::MAX - 1);
+    pub fn with_max_nodes(size: u32, max_nodes: u32) -> Self {
+        assert!(max_nodes < NI::MAX - 1);
 
         let mut this = Self {
             size,
-            max_allocs,
+            max_nodes,
             free_storage: 0,
             used_bins_top: 0,
             free_offset: 0,
@@ -200,19 +200,17 @@ where
     pub fn reset(&mut self) {
         self.free_storage = 0;
         self.used_bins_top = 0;
-        self.free_offset = self.max_allocs - 1;
+        self.free_offset = self.max_nodes - 1;
 
         self.used_bins.iter_mut().for_each(|bin| *bin = 0);
 
         self.bin_indices.iter_mut().for_each(|index| *index = None);
 
-        self.nodes = vec![Node::default(); self.max_allocs as usize];
+        self.nodes = vec![Node::default(); self.max_nodes as usize];
 
         // Freelist is a stack. Nodes in inverse order so that [0] pops first.
-        self.free_nodes = (0..self.max_allocs)
-            .map(|i| {
-                NI::NonMax::try_from(NI::from_u32(self.max_allocs - i - 1)).unwrap_or_default()
-            })
+        self.free_nodes = (0..self.max_nodes)
+            .map(|i| NI::NonMax::try_from(NI::from_u32(self.max_nodes - i - 1)).unwrap_or_default())
             .collect();
 
         // Start state: Whole storage as one big node
