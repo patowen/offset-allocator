@@ -250,13 +250,10 @@ where
                 offset = prev_node.data_offset;
                 size += prev_node.data_size;
 
-                // Remove node from the bin linked list and put it in the
-                // freelist
-                self.remove_node_from_bin(neighbor_prev);
-
                 let prev_node = &self.nodes[neighbor_prev.to_usize()];
                 debug_assert_eq!(prev_node.neighbor_next, Some(node_index));
                 self.nodes[node_index.to_usize()].neighbor_prev = prev_node.neighbor_prev;
+                self.remove_node_from_bin(neighbor_prev);
             }
         }
 
@@ -267,13 +264,10 @@ where
                 let next_node = &self.nodes[neighbor_next.to_usize()];
                 size += next_node.data_size;
 
-                // Remove node from the bin linked list and put it in the
-                // freelist
-                self.remove_node_from_bin(neighbor_next);
-
                 let next_node = &self.nodes[neighbor_next.to_usize()];
                 debug_assert_eq!(next_node.neighbor_prev, Some(node_index));
                 self.nodes[node_index.to_usize()].neighbor_next = next_node.neighbor_next;
+                self.remove_node_from_bin(neighbor_next);
             }
         }
 
@@ -343,6 +337,9 @@ where
 
     /// Deletes a [`Node`], removing it from the bin. Note that the caller of this
     /// function is responsible for fixing up links in the "neighbor" linked list.
+    /// Since the node should be treated as deleted, it is not recommended to reference
+    /// the [`Node`] type from this index after calling this function, so it recommended
+    /// to fix up links in the "neighbor" linked list *before* this function is called.
     fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
         // Copy the node to work around borrow check.
         let node = self.nodes[node_index.to_usize()];
