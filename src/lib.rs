@@ -49,7 +49,7 @@ where
     NI: NodeIndex,
 {
     /// The location of this allocation within the buffer.
-    pub offset: NI,
+    pub offset: u32,
     /// The node index associated with this allocation.
     metadata: NI::NonMax,
 }
@@ -205,7 +205,7 @@ where
 
         let node = &mut self.nodes[node_index];
         Some(Allocation {
-            offset: NI::from_u32(node.data_offset),
+            offset: node.data_offset,
             metadata: node_index,
         })
     }
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn basic_offset_allocator() {
-        let mut allocator = Allocator::new(1024 * 1024 * 256);
+        let mut allocator: Allocator = Allocator::new(1024 * 1024 * 256);
         let a = allocator.allocate(1337).unwrap();
         let offset: u32 = a.offset;
         assert_eq!(offset, 0);
