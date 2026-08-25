@@ -12,6 +12,4 @@ keywords = ["memory-management"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = "0.4"
-nonmax = "0.5"
 creusot-std = "0.14.0-dev"
