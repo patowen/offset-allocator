@@ -4,6 +4,8 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+use creusot_std::prelude::*;
+
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
 use log::debug;
@@ -43,7 +45,7 @@ where
 }
 
 /// A single allocation.
-#[derive(Clone, Copy)]
+#[derive(creusot_std::prelude::Clone, Copy)]
 pub struct Allocation<NI = u32>
 where
     NI: NodeIndex,
@@ -64,14 +66,14 @@ pub struct StorageReport {
 }
 
 /// Provides a detailed accounting of each bin within the allocator.
-#[derive(Debug, Default)]
+#[derive(Debug, creusot_std::prelude::Default)]
 pub struct StorageReportFull {
     /// Each bin within the allocator.
     pub free_regions: SmallFloatMap<StorageReportFullRegion>,
 }
 
 /// A detailed accounting of each allocator bin.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(creusot_std::prelude::Clone, Copy, Debug, creusot_std::prelude::Default)]
 pub struct StorageReportFullRegion {
     /// The size of the bin, in units.
     pub size: u32,
@@ -79,7 +81,7 @@ pub struct StorageReportFullRegion {
     pub count: u32,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(creusot_std::prelude::Clone, Copy, creusot_std::prelude::Default)]
 struct Node<NI = u32>
 where
     NI: NodeIndex,
