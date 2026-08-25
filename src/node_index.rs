@@ -2,8 +2,8 @@
 
 use std::fmt::{Debug, Display};
 
-use creusot_std::{macros::extern_spec, model::DeepModel};
-use nonmax::{NonMaxU16, NonMaxU32};
+use creusot_std::prelude::*;
+use crate::nonmax::{NonMaxU16, NonMaxU32};
 
 /// Determines the number of allocations that the allocator supports.
 ///
@@ -30,7 +30,7 @@ pub trait NodeIndex: Clone + Copy + Default {
 /// The `NonMax` version of the [`NodeIndex`].
 ///
 /// For example, for `u32`, the `NonMax` version is [`NonMaxU32`].
-pub trait NodeIndexNonMax: Clone + Copy + PartialEq + Default + Debug + Display {
+pub trait NodeIndexNonMax: Clone + Copy + PartialEq + Default + Debug + Display + DeepModel {
     /// Converts this type to an unsigned machine word.
     fn to_usize(self) -> usize;
 }

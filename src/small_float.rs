@@ -46,7 +46,7 @@ impl SmallFloat {
     const MANTISSA_MASK: u32 = Self::MANTISSA_VALUE - 1;
 
     /// All possible values of a [`SmallFloat`] from smallest to largest
-    pub fn values() -> impl ExactSizeIterator<Item = Self> {
+    pub fn values() -> impl ExactSizeIterator<Item = Self> + IteratorSpec {
         (0..Self::NUM_VALUES).map(|i| Self(i as u32))
     }
 

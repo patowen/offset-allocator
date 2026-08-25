@@ -22,6 +22,7 @@ pub mod ext;
 mod bins_map;
 mod node_index;
 mod node_slab;
+mod nonmax;
 mod small_float;
 
 /// An allocator that manages a single contiguous chunk of space and hands out
