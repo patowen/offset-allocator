@@ -5,6 +5,8 @@ use crate::{
     small_float::{SmallFloat, SmallFloatMap},
 };
 
+use creusot_std::prelude::*;
+
 const NUM_TOP_BINS: usize = 32;
 const TOP_BINS_INDEX_SHIFT: u32 = 3;
 const LEAF_BINS_INDEX_MASK: u32 = 7;
@@ -31,9 +33,11 @@ impl<NI: NodeIndex> Default for BinsMap<NI> {
 
 impl<NI: NodeIndex> BinsMap<NI> {
     /// Returns the minimum bin index greater than or equal to `min` that corresponds to a nonempty bin
+    #[trusted]
     pub fn min_occupied_since(&self, min: SmallFloat) -> Option<SmallFloat> {
         /// Out of bits at position greater than or equal to `start_bit_index`, Returns the position of the
         /// lowest-position bit that is set to 1. Return `None` if there is no such bit.
+        #[trusted]
         fn find_lowest_bit_set_after(bit_mask: u32, start_bit_index: u32) -> Option<u32> {
             let mask_before_start_index = (1 << start_bit_index) - 1;
             let mask_after_start_index = !mask_before_start_index;
@@ -81,6 +85,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
     }
 
     /// Returns the maximum bin index that corresponds to a nonempty bin
+    #[trusted]
     pub fn max_occupied(&self) -> Option<SmallFloat> {
         if self.occupied_bins_top == 0 {
             return None;
@@ -113,6 +118,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
 
     /// Internal method to ensure that [`Self::occupied_bins`] and [`Self::occupied_bins_top`] are correct
     /// after a bin has been emptied out
+    #[trusted]
     fn mark_bin_empty(&mut self, bin_index: SmallFloat) {
         let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
         let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;
@@ -129,6 +135,7 @@ impl<NI: NodeIndex> BinsMap<NI> {
 
     /// Internal method to ensure that [`Self::occupied_bins`] and [`Self::occupied_bins_top`] are correct
     /// after an empty bin has been occupied
+    #[trusted]
     fn mark_bin_occupied(&mut self, bin_index: SmallFloat) {
         let top_bin_index = bin_index.reinterpret_as_u32() >> TOP_BINS_INDEX_SHIFT;
         let leaf_bin_index = bin_index.reinterpret_as_u32() & LEAF_BINS_INDEX_MASK;

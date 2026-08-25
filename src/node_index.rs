@@ -2,6 +2,7 @@
 
 use std::fmt::{Debug, Display};
 
+use creusot_std::{macros::extern_spec, model::DeepModel};
 use nonmax::{NonMaxU16, NonMaxU32};
 
 /// Determines the number of allocations that the allocator supports.

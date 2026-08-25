@@ -40,10 +40,10 @@ impl<NI: NodeIndex> NodeSlab<NI> {
         assert!(!self.is_full());
         self.num_free_nodes -= 1;
         let node_index = self.free_nodes[self.num_free_nodes as usize];
-        debug!(
-            "Getting node {} from freelist[{}]",
-            node_index, self.num_free_nodes
-        );
+//         debug!(
+//             "Getting node {} from freelist[{}]",
+//             node_index, self.num_free_nodes
+//         );
         self.nodes[node_index.to_usize()] = node;
         node_index
     }
@@ -52,10 +52,10 @@ impl<NI: NodeIndex> NodeSlab<NI> {
     #[inline]
     pub fn remove(&mut self, index: NI::NonMax) {
         // Insert the removed node to freelist
-        debug!(
-            "Putting node {} into freelist[{}] (free)",
-            index, self.num_free_nodes
-        );
+//         debug!(
+//             "Putting node {} into freelist[{}] (free)",
+//             index, self.num_free_nodes
+//         );
         self.free_nodes[self.num_free_nodes as usize] = index;
         self.num_free_nodes += 1;
     }

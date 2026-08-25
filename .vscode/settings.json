@@ -1,0 +1,23 @@
+{
+    "chat": {
+        "disableAIFeatures": true
+    },
+
+    "editor": {
+        "semanticHighlighting": {
+            "enabled": false
+        }
+    },
+
+    "rust-analyzer": {
+        "check": {
+            "overrideCommand": [
+                "cargo",
+                "creusot",
+                "--only=coma",
+                "--",
+                "--message-format=json"
+            ]
+        }
+    }
+}

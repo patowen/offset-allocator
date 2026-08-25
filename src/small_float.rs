@@ -5,9 +5,29 @@
 //! and a 5-bit exponent. Each of these 256 values correspond to a specific bin, which determines
 //! the size of the allocations supported by each bin.
 
+use creusot_std::prelude::*;
+
 /// An 8-bit unsigned floating point value representing an integer using a 3-bit mantissa and a 5-bit exponent
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, creusot_std::prelude::Clone, Copy, creusot_std::prelude::PartialEq, Eq)]
 pub struct SmallFloat(u32);
+
+impl DeepModel for SmallFloat {
+    type DeepModelTy = <u32 as DeepModel>::DeepModelTy;
+
+    #[logic]
+    fn deep_model(self) -> Self::DeepModelTy {
+        self.0.deep_model()
+    }
+}
+
+extern_spec! {
+    impl u32 {
+        #[requires(self@ != 0)]
+        #[ensures(2.pow(result@) <= self@)]
+        #[ensures(2.pow(result@ + 1) > self@)]
+        fn ilog2(self) -> u32;
+    }
+}
 
 impl SmallFloat {
     /// The number of bits that represent the mantissa
@@ -31,6 +51,7 @@ impl SmallFloat {
     }
 
     /// The least [`SmallFloat`] greater than or equal to the given value
+    #[trusted]
     pub fn from_u32_round_up(value: u32) -> Self {
         let mut exp = 0;
         let mut mantissa;
@@ -58,6 +79,7 @@ impl SmallFloat {
     }
 
     /// The greatest [`SmallFloat`] less than or equal to the given value
+    #[trusted]
     pub fn from_u32_round_down(value: u32) -> Self {
         let mut exp = 0;
         let mantissa;
@@ -77,6 +99,7 @@ impl SmallFloat {
     }
 
     /// The `u32` that holds the same value as the [`SmallFloat`]
+    #[trusted]
     pub fn to_u32(self) -> u32 {
         let exponent = self.0 >> Self::MANTISSA_BITS;
         let mantissa = self.0 & Self::MANTISSA_MASK;
@@ -113,12 +136,14 @@ impl<T: Default + Copy> Default for SmallFloatMap<T> {
 impl<T> std::ops::Index<SmallFloat> for SmallFloatMap<T> {
     type Output = T;
 
+    #[trusted]
     fn index(&self, index: SmallFloat) -> &Self::Output {
         &self.0[index.0 as usize]
     }
 }
 
 impl<T> std::ops::IndexMut<SmallFloat> for SmallFloatMap<T> {
+    #[trusted]
     fn index_mut(&mut self, index: SmallFloat) -> &mut Self::Output {
         &mut self.0[index.0 as usize]
     }

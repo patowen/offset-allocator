@@ -179,10 +179,10 @@ where
             self.nodes[bin_list_next].bin_list_prev = None;
         }
         self.free_storage -= node_total_size;
-        debug!(
-            "Free storage: {} (-{}) (allocate)",
-            self.free_storage, node_total_size
-        );
+        // debug!(
+        //     "Free storage: {} (-{}) (allocate)",
+        //     self.free_storage, node_total_size
+        // );
 
         // Push back remainder N elements to a lower bin
         let remainder_size = node_total_size - size;
@@ -307,10 +307,10 @@ where
         self.bins_map.replace_bin_node(bin_index, Some(node_index));
 
         self.free_storage += size;
-        debug!(
-            "Free storage: {} (+{}) (insert_node_into_bin)",
-            self.free_storage, size
-        );
+        // debug!(
+        //     "Free storage: {} (+{}) (insert_node_into_bin)",
+        //     self.free_storage, size
+        // );
         node_index
     }
 
@@ -348,10 +348,10 @@ where
         self.nodes.remove(node_index);
 
         self.free_storage -= node.data_size;
-        debug!(
-            "Free storage: {} (-{}) (remove_node_from_bin)",
-            self.free_storage, node.data_size
-        );
+        // debug!(
+        //     "Free storage: {} (-{}) (remove_node_from_bin)",
+        //     self.free_storage, node.data_size
+        // );
     }
 
     /// Returns the *used* size of an allocation.
