@@ -129,6 +129,7 @@ where
     /// Note also that the maximum number of nodes must be at most
     /// [`NodeIndex::MAX`] and at least 1. If this restriction is violated, this
     /// constructor will panic.
+    #[trusted]
     pub fn with_max_nodes(size: u32, max_nodes: u32) -> Self {
         assert!(max_nodes > 0);
         assert!(max_nodes <= NI::MAX);
@@ -159,6 +160,7 @@ where
     ///
     /// If there's not enough contiguous space for this allocation, returns
     /// None.
+    #[trusted]
     pub fn allocate(&mut self, size: u32) -> Option<Allocation<NI>> {
         // Out of allocations?
         if self.nodes.is_full() {
@@ -221,6 +223,7 @@ where
     /// It may or may not panic. Note that, because this crate contains no
     /// unsafe code, the memory safety of the allocator *itself* will be
     /// uncompromised, even on double free.
+    #[trusted]
     pub fn free(&mut self, allocation: Allocation<NI>) {
         let node_index = allocation.metadata;
 
@@ -288,6 +291,7 @@ where
 
     /// Creates a new free [`Node`] and inserts it at the head of the appropriate bin. Note that the caller of this
     /// function is responsible for linking the node in the "neighbor" linked list.
+    #[trusted]
     fn insert_node_into_bin(&mut self, size: u32, data_offset: u32) -> NI::NonMax {
         // Round down when finding the bin index to ensure that the node being put in that bin can hold any allocation associated with that bin
         let bin_index = SmallFloat::from_u32_round_down(size);
@@ -321,6 +325,7 @@ where
     /// Since the node should be treated as deleted, it is not recommended to reference
     /// the [`Node`] type from this index after calling this function, so it recommended
     /// to fix up links in the "neighbor" linked list *before* this function is called.
+    #[trusted]
     fn remove_node_from_bin(&mut self, node_index: NI::NonMax) {
         // Copy the node to work around borrow check.
         let node = self.nodes[node_index];
@@ -365,6 +370,7 @@ where
 
     /// Returns a structure containing the amount of free space remaining, as
     /// well as the largest amount that can be allocated at once.
+    #[trusted]
     pub fn storage_report(&self) -> StorageReport {
         let mut largest_free_region = 0;
         let mut free_storage = 0;
@@ -383,6 +389,7 @@ where
     }
 
     /// Returns detailed information about the number of allocations in each bin.
+    #[trusted]
     pub fn storage_report_full(&self) -> StorageReportFull {
         let mut report = StorageReportFull::default();
         for i in SmallFloat::values() {

@@ -30,6 +30,7 @@ impl From<NonMaxU16> for u16 {
 }
 
 impl std::fmt::Display for NonMaxU16 {
+    #[trusted]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -73,6 +74,7 @@ impl From<NonMaxU32> for u32 {
 }
 
 impl std::fmt::Display for NonMaxU32 {
+    #[trusted]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

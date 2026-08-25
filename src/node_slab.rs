@@ -1,4 +1,5 @@
 use crate::log::debug;
+use creusot_std::prelude::*;
 
 use crate::{
     node_index::{NodeIndex, NodeIndexNonMax},
@@ -16,10 +17,13 @@ pub(crate) struct NodeSlab<NI: NodeIndex> {
 
 impl<NI: NodeIndex> NodeSlab<NI> {
     /// Construct a new, empty `NodeSlab`
+    #[trusted]
     #[inline]
     pub fn new(max_nodes: u32) -> Self {
+        let mut nodes = Vec::with_capacity(max_nodes as usize);
+        nodes.resize(max_nodes as usize, Node::default());
         NodeSlab {
-            nodes: vec![Node::default(); max_nodes as usize],
+            nodes,
             // Freelist is a stack. Nodes in inverse order so that [0] pops first.
             free_nodes: (0..max_nodes)
                 .map(|i| NI::NonMax::try_from(NI::from_u32(max_nodes - i - 1)).unwrap_or_default())
@@ -35,6 +39,7 @@ impl<NI: NodeIndex> NodeSlab<NI> {
     }
 
     /// Insert a node into the slab, returning the index associated with it
+    #[trusted]
     #[inline]
     pub fn insert(&mut self, node: Node<NI>) -> NI::NonMax {
         assert!(!self.is_full());
@@ -49,6 +54,7 @@ impl<NI: NodeIndex> NodeSlab<NI> {
     }
 
     /// Remove the node associated with the index
+    #[trusted]
     #[inline]
     pub fn remove(&mut self, index: NI::NonMax) {
         // Insert the removed node to freelist
@@ -64,6 +70,7 @@ impl<NI: NodeIndex> NodeSlab<NI> {
 impl<NI: NodeIndex> std::ops::Index<NI::NonMax> for NodeSlab<NI> {
     type Output = Node<NI>;
 
+    #[trusted]
     #[inline]
     fn index(&self, index: NI::NonMax) -> &Self::Output {
         &self.nodes[index.to_usize()]
@@ -71,6 +78,7 @@ impl<NI: NodeIndex> std::ops::Index<NI::NonMax> for NodeSlab<NI> {
 }
 
 impl<NI: NodeIndex> std::ops::IndexMut<NI::NonMax> for NodeSlab<NI> {
+    #[trusted]
     #[inline]
     fn index_mut(&mut self, index: NI::NonMax) -> &mut Self::Output {
         &mut self.nodes[index.to_usize()]
