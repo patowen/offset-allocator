@@ -54,10 +54,12 @@ impl SmallFloat {
     const EXPONENT_BITS: u32 = 5;
 
     /// The number of possible values that can be stored in this `SmallFloat`
+    #[bitwise_proof]
     #[ensures(SmallFloat::NUM_VALUES@ == 256)]
     const NUM_VALUES: usize = 1 << (Self::MANTISSA_BITS + Self::EXPONENT_BITS);
 
     /// The number of possible mantissa values. This number is a power of 2.
+    #[bitwise_proof]
     #[ensures(SmallFloat::MANTISSA_VALUE@ == 8)]
     const MANTISSA_VALUE: u32 = 1 << Self::MANTISSA_BITS;
 
@@ -71,6 +73,7 @@ impl SmallFloat {
     }
 
     /// The least [`SmallFloat`] greater than or equal to the given value
+    #[bitwise_proof]
     pub fn from_u32_round_up(value: u32) -> Self {
         let mut exp = 0;
         let mut mantissa;
