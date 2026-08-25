@@ -1,5 +1,4 @@
 use creusot_std::prelude::*;
-use std::num::NonZeroU16;
 
 #[derive(
     Debug,

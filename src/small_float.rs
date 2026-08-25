@@ -20,29 +20,49 @@ impl DeepModel for SmallFloat {
     }
 }
 
+impl View for SmallFloat {
+    type ViewTy = Int;
+
+    #[logic]
+    fn view(self) -> Int {
+        let exponent = self.0 >> Self::MANTISSA_BITS;
+        let mantissa = self.0 & Self::MANTISSA_MASK;
+        if exponent == 0u32 {
+            mantissa.view()
+        } else {
+            (mantissa | Self::MANTISSA_VALUE).view() * (exponent.view() - 1).pow2()
+        }
+    }
+}
+
 extern_spec! {
     impl u32 {
         #[requires(self@ != 0)]
-        #[ensures(2.pow(result@) <= self@)]
-        #[ensures(2.pow(result@ + 1) > self@)]
+        #[ensures(result@.pow2() <= self@)]
+        #[ensures((result@ + 1).pow2() > self@)]
         fn ilog2(self) -> u32;
     }
 }
 
 impl SmallFloat {
     /// The number of bits that represent the mantissa
+    #[ensures(SmallFloat::MANTISSA_BITS@ == 3)]
     const MANTISSA_BITS: u32 = 3;
 
     /// The number of bits that represent the exponent
+    #[ensures(SmallFloat::EXPONENT_BITS@ == 5)]
     const EXPONENT_BITS: u32 = 5;
 
     /// The number of possible values that can be stored in this `SmallFloat`
+    #[ensures(SmallFloat::NUM_VALUES@ == 256)]
     const NUM_VALUES: usize = 1 << (Self::MANTISSA_BITS + Self::EXPONENT_BITS);
 
     /// The number of possible mantissa values. This number is a power of 2.
+    #[ensures(SmallFloat::MANTISSA_VALUE@ == 8)]
     const MANTISSA_VALUE: u32 = 1 << Self::MANTISSA_BITS;
 
     /// A mask that can be bitwise-anded with the float to get just the mantissa
+    #[ensures(SmallFloat::MANTISSA_MASK@ == 7)]
     const MANTISSA_MASK: u32 = Self::MANTISSA_VALUE - 1;
 
     /// All possible values of a [`SmallFloat`] from smallest to largest
@@ -51,7 +71,6 @@ impl SmallFloat {
     }
 
     /// The least [`SmallFloat`] greater than or equal to the given value
-    #[trusted]
     pub fn from_u32_round_up(value: u32) -> Self {
         let mut exp = 0;
         let mut mantissa;
